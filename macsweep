@@ -1,0 +1,178 @@
+#!/usr/bin/env bash
+# macsweep — free up disk space on macOS from the command line.
+# https://github.com/shannong57/macsweep  ·  MIT License
+# Compatible with the stock macOS bash (3.2).
+set -uf      # no globbing: every path below is literal
+IFS=$'\n'    # split lists on newlines only, so paths may contain spaces
+
+VERSION="0.1.0"
+CATEGORIES=$'caches\nlogs\ntrash\nxcode\ndevcaches'
+
+usage() {
+  cat <<EOF
+macsweep $VERSION — free up disk space on macOS
+
+Usage:
+  macsweep [scan]                     Show reclaimable space per category
+  macsweep clean [CATEGORY...]        Delete junk (all categories if none given)
+      -n, --dry-run                   Show what would be deleted, delete nothing
+      -y, --yes                       Don't ask for confirmation
+  macsweep big [PATH] [--min MB]      List the 20 largest files (default: ~, 500 MB)
+  macsweep help | version
+
+Categories:
+  caches     ~/Library/Caches
+  logs       ~/Library/Logs
+  trash      ~/.Trash
+  xcode      Xcode DerivedData and simulator caches
+  devcaches  npm, Gradle and ~/.cache (pip, etc.)
+
+macsweep only touches your own home folder and never needs sudo.
+EOF
+}
+
+# Directories whose *contents* get cleared for a category.
+targets() {
+  case "$1" in
+    caches)    echo "$HOME/Library/Caches" ;;
+    logs)      echo "$HOME/Library/Logs" ;;
+    trash)     echo "$HOME/.Trash" ;;
+    xcode)     echo "$HOME/Library/Developer/Xcode/DerivedData"
+               echo "$HOME/Library/Developer/CoreSimulator/Caches" ;;
+    devcaches) echo "$HOME/.npm/_cacache"
+               echo "$HOME/.gradle/caches"
+               echo "$HOME/.cache" ;;
+    *) return 1 ;;
+  esac
+}
+
+die() { echo "macsweep: $*" >&2; exit 1; }
+
+# KB on stdin -> "1.2G"
+human() { awk '{ split("K M G T", u); s = $1; i = 1; while (s >= 1024 && i < 4) { s /= 1024; i++ } printf "%.1f%s\n", s, u[i] }'; }
+
+size_kb() { du -sk "$1" 2>/dev/null | awk '{ s = $1 } END { print s + 0 }'; }
+
+# Exists but macOS privacy protection won't let us list it.
+blocked() { [ -d "$1" ] && ! ls "$1" >/dev/null 2>&1; }
+
+category_blocked() {
+  local d
+  for d in $(targets "$1"); do blocked "$d" && return 0; done
+  return 1
+}
+
+FDA_HINT="Grant your terminal Full Disk Access (System Settings > Privacy & Security) to include it."
+
+
+# Refuse anything that isn't a real directory strictly inside the real $HOME.
+safe_target() {
+  local d="$1" real
+  [ -d "$d" ] && [ ! -L "$d" ] || return 1
+  real=$(cd "$d" 2>/dev/null && pwd -P) || return 1
+  case "$real" in "$HOME_REAL"/?*) return 0 ;; esac
+  return 1
+}
+
+category_kb() {
+  local total=0 d
+  for d in $(targets "$1"); do
+    safe_target "$d" && total=$((total + $(size_kb "$d")))
+  done
+  echo "$total"
+}
+
+cmd_scan() {
+  local cat kb grand=0 any_blocked=0
+  for cat in $CATEGORIES; do
+    kb=$(category_kb "$cat")
+    grand=$((grand + kb))
+    if category_blocked "$cat"; then
+      printf "  %-10s %8s  (no access)\n" "$cat" "$(echo "$kb" | human)"; any_blocked=1
+    else
+      printf "  %-10s %8s\n" "$cat" "$(echo "$kb" | human)"
+    fi
+  done
+  printf "  %-10s %8s\n" "TOTAL" "$(echo "$grand" | human)"
+  echo
+  [ "$any_blocked" = 1 ] && echo "Some folders are protected by macOS. $FDA_HINT"
+  echo "Run 'macsweep clean' to reclaim it, or 'macsweep clean --dry-run' to preview."
+}
+
+cmd_clean() {
+  local dry=0 yes=0 cats="" cat d before after freed=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -n|--dry-run) dry=1 ;;
+      -y|--yes)     yes=1 ;;
+      -*) die "unknown option: $1" ;;
+      *) targets "$1" >/dev/null || die "unknown category: $1 (try: caches logs trash xcode devcaches)"
+         cats="$cats$1"$'\n' ;;
+    esac
+    shift
+  done
+  [ -n "$cats" ] || cats="$CATEGORIES"
+
+  echo "Will clear:"
+  for cat in $cats; do
+    for d in $(targets "$cat"); do
+      if blocked "$d"; then echo "  skipped   $d (no access). $FDA_HINT"; continue; fi
+      safe_target "$d" || continue
+      printf "  %8s  %s\n" "$(size_kb "$d" | human)" "$d"
+    done
+  done
+  if [ "$dry" = 1 ]; then echo "(dry run — nothing deleted)"; return 0; fi
+
+  if [ "$yes" != 1 ]; then
+    [ -t 0 ] || die "not a terminal; pass --yes to confirm"
+    printf "Delete these contents? [y/N] "
+    read -r reply
+    case "$reply" in y|Y|yes|YES) ;; *) echo "Cancelled."; return 0 ;; esac
+  fi
+
+  for cat in $cats; do
+    for d in $(targets "$cat"); do
+      blocked "$d" && continue
+      safe_target "$d" || continue
+      before=$(size_kb "$d")
+      # rm -rf removes symlinks themselves, never what they point to.
+      find "$d" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null
+      after=$(size_kb "$d")
+      freed=$((freed + before - after))
+      [ "$after" -gt 64 ] && echo "  note: some items in $d are in use or protected; left in place"
+    done
+  done
+  echo "Freed $(echo "$freed" | human)."
+}
+
+cmd_big() {
+  local path="$HOME" min=500
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --min) [ $# -ge 2 ] || die "--min needs a number"; min="$2"; shift ;;
+      -*) die "unknown option: $1" ;;
+      *) path="$1" ;;
+    esac
+    shift
+  done
+  case "$min" in ''|*[!0-9]*) die "--min must be a whole number of MB" ;; esac
+  [ -d "$path" ] || die "not a directory: $path"
+  # Filter on disk usage too: cloud-only files (Dropbox, iCloud) report a big size but use no disk.
+  find "$path" -xdev -type f -size +$((min * 2048)) -exec du -k {} + 2>/dev/null \
+    | awk -F'\t' -v min="$((min * 1024))" '$1 >= min' \
+    | sort -rn | head -n 20 \
+    | while IFS=$'\t' read -r kb f; do printf "  %8s  %s\n" "$(echo "$kb" | human)" "$f"; done
+}
+
+[ -n "${HOME:-}" ] && [ "$HOME" != "/" ] || die "HOME is not set"
+HOME_REAL=$(cd "$HOME" && pwd -P) || die "can't resolve HOME"
+
+cmd="${1:-scan}"; [ $# -gt 0 ] && shift
+case "$cmd" in
+  scan)    cmd_scan ;;
+  clean)   cmd_clean "$@" ;;
+  big)     cmd_big "$@" ;;
+  version|--version) echo "macsweep $VERSION" ;;
+  help|-h|--help)    usage ;;
+  *) usage >&2; exit 1 ;;
+esac
