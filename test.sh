@@ -44,4 +44,30 @@ mk "$HOME/big.bin" 3000000
 "$ms" big --min x 2>/dev/null && fail "accepted bad --min"
 HOME=/ "$ms" scan 2>/dev/null && fail "ran with HOME=/"
 
+# Menu: stdin stands in for the keyboard.
+# shellcheck disable=SC2059  # the argument is the scripted keystrokes
+menu() { printf "$1" | "$ms" menu; }
+mk "$HOME/Library/Caches/a"; mk "$HOME/Library/Logs/b"
+kept() { [ -f "$HOME/Library/Caches/a" ] && [ -f "$HOME/Library/Logs/b" ] || fail "$1"; }
+
+menu "q\n" | grep -q "Clean up junk" || fail "menu not shown"
+menu "1\n   \nb\nq\n" >/dev/null; kept "blank selection cleaned something"
+menu "1\n9\n0\nx\n1 9\nb\nq\n" >/dev/null; kept "bad selection cleaned something"
+menu "1\n1\nn\nb\nq\n" >/dev/null; kept "declining cleaned something"
+menu "1\n1\n" >/dev/null; kept "end of input cleaned something"
+menu "7\nq\n" | grep -q "Not a valid choice" || fail "bad main choice not rejected"
+
+menu "1\n1\ny\nb\nq\n" >/dev/null
+[ ! -e "$HOME/Library/Caches/a" ] || fail "menu did not clean caches"
+[ -f "$HOME/Library/Logs/b" ] || fail "menu cleaned logs when only caches picked"
+menu "1\na\ny\nq\n" >/dev/null
+[ ! -e "$HOME/Library/Logs/b" ] || fail "menu all did not clean logs"
+[ -f "$HOME/Documents/keep.txt" ] || fail "menu deleted Documents"
+
+menu "2\n\n1\n\nq\n" | grep -q "big.bin" || fail "menu large files missed big.bin"
+menu "2\n~\n1\n\nq\n" | grep -q "big.bin" || fail "menu large files did not expand ~"
+menu "2\n/no/such/dir\nq\n" | grep -q "Not a folder" || fail "bad folder not rejected"
+menu "2\n\nabc\nq\n" | grep -q "whole number" || fail "bad size not rejected"
+"$ms" </dev/null | grep -q TOTAL || fail "no terminal should still scan"
+
 echo "all tests passed"

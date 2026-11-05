@@ -7,13 +7,15 @@ IFS=$'\n'    # split lists on newlines only, so paths may contain spaces
 
 VERSION="0.1.0"
 CATEGORIES=$'caches\nlogs\ntrash\nxcode\ndevcaches'
+MENU=0       # 1 when running inside the menu, which is always interactive
 
 usage() {
   cat <<EOF
 macsweep $VERSION — free up disk space on macOS
 
 Usage:
-  macsweep [scan]                     Show reclaimable space per category
+  macsweep                            Open the menu
+  macsweep scan                       Show reclaimable space per category
   macsweep clean [CATEGORY...]        Delete junk (all categories if none given)
       -n, --dry-run                   Show what would be deleted, delete nothing
       -y, --yes                       Don't ask for confirmation
@@ -124,7 +126,7 @@ cmd_clean() {
   if [ "$dry" = 1 ]; then echo "(dry run — nothing deleted)"; return 0; fi
 
   if [ "$yes" != 1 ]; then
-    [ -t 0 ] || die "not a terminal; pass --yes to confirm"
+    [ -t 0 ] || [ "$MENU" = 1 ] || die "not a terminal; pass --yes to confirm"
     printf "Delete these contents? [y/N] "
     read -r reply
     case "$reply" in y|Y|yes|YES) ;; *) echo "Cancelled."; return 0 ;; esac
@@ -164,11 +166,109 @@ cmd_big() {
     | while IFS=$'\t' read -r kb f; do printf "  %8s  %s\n" "$(echo "$kb" | human)" "$f"; done
 }
 
+# Prompt into $reply. q quits from any menu, and so does end of input.
+ask() {
+  printf "%s" "$1"
+  read -r reply || { echo; exit 0; }
+  case "$reply" in q|Q) exit 0 ;; esac
+}
+
+cat_label() {
+  case "$1" in
+    caches) echo "Caches" ;;
+    logs)   echo "Logs" ;;
+    trash)  echo "Trash" ;;
+    xcode)  echo "Xcode" ;;
+    devcaches) echo "Dev caches" ;;
+  esac
+}
+
+# "1 3" -> those category names, one per line. Fails on anything else, and on
+# an empty selection: cmd_clean treats no categories as all of them.
+pick_categories() {
+  local n c out=""
+  for n in $(echo "$1" | tr -s " ," "\n"); do
+    case "$n" in *[!0-9]*) return 1 ;; esac
+    c=$(echo "$CATEGORIES" | sed -n "${n}p" 2>/dev/null)
+    [ -n "$c" ] || return 1
+    case $'\n'"$out" in *$'\n'"$c"$'\n'*) ;; *) out="$out$c"$'\n' ;; esac
+  done
+  [ -n "$out" ] || return 1
+  printf "%s" "$out"
+}
+
+menu_clean() {
+  local cat i picked
+  while :; do
+    echo; echo "  Clean up junk — scanning..."
+    i=0
+    for cat in $CATEGORIES; do
+      i=$((i + 1))
+      if category_blocked "$cat"; then
+        printf "  %s  %-12s (no access, needs Full Disk Access)\n" "$i" "$(cat_label "$cat")"
+      else
+        printf "  %s  %-12s %8s\n" "$i" "$(cat_label "$cat")" "$(category_kb "$cat" | human)"
+      fi
+    done
+    echo "  a  All     b  Back"
+    echo
+    ask "Clean which? (numbers, a for all, b to go back): "
+    case "$reply" in
+      b|B) return ;;
+      a|A) picked="$CATEGORIES" ;;
+      *) picked=$(pick_categories "$reply") || { echo "  Not a valid choice."; continue; } ;;
+    esac
+    # shellcheck disable=SC2086  # one category per line, split on IFS
+    cmd_clean $picked
+  done
+}
+
+menu_big() {
+  local path min out
+  echo
+  ask "Folder to search (Enter for your home folder, b to go back): "
+  case "$reply" in b|B) return ;; esac
+  path="${reply:-$HOME}"
+  path="${path/#\~/$HOME}"
+  [ -d "$path" ] || { echo "  Not a folder: $path"; return; }
+  ask "Smallest size in MB (Enter for 500, b to go back): "
+  case "$reply" in b|B) return ;; esac
+  min="${reply:-500}"
+  case "$min" in *[!0-9]*) echo "  Size must be a whole number of MB."; return ;; esac
+  echo "  Searching..."
+  out=$(cmd_big "$path" --min "$min")
+  echo "${out:-  Nothing that large.}"
+  echo
+  ask "Press Enter to go back: "
+}
+
+menu_main() {
+  local disk
+  while :; do
+    disk=$(df -Pk "$HOME" | awk 'NR == 2 { print $4; print $2 }' | human | paste -sd " " - | sed "s/ / free of /")
+    echo
+    printf "  macsweep — Mac cleanup            Disk: %s\n\n" "$disk"
+    echo "  1  Clean up junk          (caches, logs, Trash, Xcode, dev caches)"
+    echo "  2  Find large files"
+    echo "  q  Quit"
+    echo
+    ask "Choose: "
+    case "$reply" in
+      1) menu_clean ;;
+      2) menu_big ;;
+      *) echo "  Not a valid choice." ;;
+    esac
+  done
+}
+
 [ -n "${HOME:-}" ] && [ "$HOME" != "/" ] || die "HOME is not set"
 HOME_REAL=$(cd "$HOME" && pwd -P) || die "can't resolve HOME"
 
-cmd="${1:-scan}"; [ $# -gt 0 ] && shift
+# Bare macsweep opens the menu at a terminal and scans when scripted.
+if [ $# -eq 0 ] && [ -t 0 ]; then cmd=menu; else cmd="${1:-scan}"; fi
+[ $# -gt 0 ] && shift
 case "$cmd" in
+  menu)    MENU=1; menu_main ;;
   scan)    cmd_scan ;;
   clean)   cmd_clean "$@" ;;
   big)     cmd_big "$@" ;;
