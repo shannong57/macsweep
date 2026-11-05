@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Runs macsweep against a throwaway fake $HOME. Usage: ./test.sh
+# shellcheck disable=SC2016  # stub bodies expand when the stub runs
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(mktemp -d)
@@ -69,5 +70,80 @@ menu "2\n~\n1\n\nq\n" | grep -q "big.bin" || fail "menu large files did not expa
 menu "2\n/no/such/dir\nq\n" | grep -q "Not a folder" || fail "bad folder not rejected"
 menu "2\n\nabc\nq\n" | grep -q "whole number" || fail "bad size not rejected"
 "$ms" </dev/null | grep -q TOTAL || fail "no terminal should still scan"
+
+# Everything below runs against stubs: no real app, Trash or system setting is touched.
+export MACSWEEP_ROOT="$root/sys"
+calls="$root/calls"; : > "$calls"; export calls
+mkdir -p "$root/bin" "$root/trashed" "$MACSWEEP_ROOT/usr/bin"; export trashed="$root/trashed"
+stub() { printf '#!/usr/bin/env bash\necho "%s $*" >> "$calls"\n%s\n' "$1" "${2:-}" > "$root/bin/$1"; chmod +x "$root/bin/$1"; }
+stub plutil 'f="${@: -1}"; v=$(sed -n "s/^$2=//p" "$f" 2>/dev/null); [ -n "$v" ] && printf "%s\n" "$v"'
+# Includes the real process list, so a check that matches itself gets caught on a Mac.
+stub ps 'echo "${PS_OUT:-}"; /bin/ps -axo command= 2>/dev/null || true'
+cat > "$MACSWEEP_ROOT/usr/bin/trash" <<'S'
+#!/usr/bin/env bash
+shift
+for f in "$@"; do case "$f" in *Stuck*) exit 1 ;; esac; mv "$f" "$trashed/$(basename "$f")-$RANDOM"; done
+S
+chmod +x "$MACSWEEP_ROOT/usr/bin/trash"
+export PATH="$root/bin:$PATH"
+
+app() {  # app DIR NAME ID SIZE
+  mkdir -p "$1/$2.app/Contents"
+  printf 'CFBundleIdentifier=%s\nCFBundleShortVersionString=1.2.3\n' "$3" > "$1/$2.app/Contents/Info.plist"
+  head -c "$4" /dev/zero > "$1/$2.app/Contents/pad"
+}
+A="$MACSWEEP_ROOT/Applications"; L="$HOME/Library"
+app "$A" "Fake App" com.fake.app 900000
+app "$A" Thing com.apple.Thing 800000
+app "$HOME/Applications" Evil ../.. 20000
+app "$A" Stuck com.fake.stuck 5000
+mk "$L/Application Support/Fake App/data"
+mk "$L/Application Support/com.fake.app/data"
+mk "$L/Caches/com.fake.app/data"
+mk "$L/Preferences/com.fake.app.plist"
+mk "$L/Containers/com.fake.app/data"
+mk "$L/Saved Application State/com.fake.app.savedState/data"
+mk "$L/Caches/com.fake.app2/keep"
+mk "$L/Caches/com.fake.stuck/keep"
+mk "$MACSWEEP_ROOT/Library/LaunchDaemons/com.fake.app.plist"
+
+out=$(menu "3\n1\nb\nb\nq\n")
+echo "$out" | grep -q "Fake App" || fail "uninstall list missing app: $out"
+echo "$out" | grep -q "Thing" && fail "uninstall list shows Apple app"
+"$ms" uninstall Thing --yes 2>/dev/null && fail "uninstalled an Apple app"
+[ -d "$A/Thing.app" ] || fail "Apple app removed"
+"$ms" uninstall "Fake App" </dev/null &>/dev/null && fail "uninstalled without a tty or --yes"
+"$ms" uninstall Nope --yes 2>/dev/null && fail "accepted unknown app"
+menu "3\n1\n99\n0\nabc\nb\nb\nq\n" >/dev/null
+menu "3\n1\n1\nn\nb\nb\nq\n" >/dev/null
+[ -d "$A/Fake App.app" ] || fail "uninstalled after declining"
+PS_OUT="/x $A/Fake App.app/Contents/MacOS/Fake" "$ms" uninstall "fake app" --yes | grep -q "is running" || fail "running app not refused"
+[ -d "$A/Fake App.app" ] || fail "removed a running app"
+
+"$ms" uninstall Evil --yes >/dev/null
+[ ! -e "$HOME/Applications/Evil.app" ] || fail "evil app not removed"
+[ -f "$HOME/Documents/keep.txt" ] && [ -d "$L/Caches" ] || fail "app ID climbed out of Library"
+
+out=$("$ms" uninstall Stuck --yes || true); echo "$out" | grep -q "Couldn't move" || fail "trash failure hidden: $out"
+[ -d "$L/Caches/com.fake.stuck" ] || fail "removed leftovers when the app could not be moved"
+
+out=$(menu "3\n1\n1\ny\nb\nb\nq\n")
+[ ! -e "$A/Fake App.app" ] || fail "menu did not uninstall"
+for p in "Application Support/Fake App" "Application Support/com.fake.app" Caches/com.fake.app \
+         Preferences/com.fake.app.plist Containers/com.fake.app "Saved Application State/com.fake.app.savedState"; do
+  [ ! -e "$L/$p" ] || fail "leftover kept: $p"
+done
+[ -f "$L/Caches/com.fake.app2/keep" ] || fail "took another app's files"
+[ -f "$MACSWEEP_ROOT/Library/LaunchDaemons/com.fake.app.plist" ] || fail "touched a system file"
+echo "$out" | grep -q "sudo rm -rf" || fail "system leftover not listed"
+echo "$out" | grep -q "Moved" || fail "no result message"
+
+stub brew '[ "$1" = outdated ] && echo "git (2.1) < 2.2"'
+stub softwareupdate 'printf "Software Update found:\n* Label: macOS 99.1\n\tTitle: macOS\n"'
+out=$(menu "3\n2\n\nb\nq\n")
+echo "$out" | grep -q "git (2.1)" || fail "brew update missing: $out"
+echo "$out" | grep -q "macOS 99.1" || fail "macOS update missing: $out"
+echo "$out" | grep -q "mas" || fail "no hint for missing mas: $out"
+grep -q "brew upgrade" "$calls" && fail "updates installed something"
 
 echo "all tests passed"
