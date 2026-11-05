@@ -6,7 +6,7 @@
 set -uf      # no globbing: every path below is literal
 IFS=$'\n'    # split lists on newlines only, so paths may contain spaces
 
-VERSION="0.2.0"
+VERSION="0.2.1"
 CATEGORIES=$'caches\nlogs\ntrash\nxcode\ndevcaches'
 MENU=0       # 1 when running inside the menu, which is always interactive
 ROOT="${MACSWEEP_ROOT:-}"   # prefix for system folders; lets the tests use a fake one
@@ -180,11 +180,14 @@ cmd_big() {
 
 plist_get() { plutil -extract "$2" raw -o - "$1" 2>/dev/null; }
 
-# "KB<tab>path" per app, biggest first. Apple's own apps are left out.
+# "KB<tab>path" per app, biggest first. Apple's own apps are left out, except Xcode.
 list_apps() {
   local a
   for a in $(find "$ROOT/Applications" "$HOME/Applications" -maxdepth 2 -name "*.app" -prune 2>/dev/null); do
-    case "$(plist_get "$a/Contents/Info.plist" CFBundleIdentifier)" in com.apple.*) continue ;; esac
+    case "$(plist_get "$a/Contents/Info.plist" CFBundleIdentifier)" in
+      com.apple.dt.Xcode) ;;
+      com.apple.*) continue ;;
+    esac
     printf "%s\t%s\n" "$(size_kb "$a")" "$a"
   done | sort -rn
 }
@@ -214,11 +217,11 @@ system_leftovers() {
   done
 }
 
-# /usr/bin/trash arrived in macOS 15; Finder handles older systems.
+# /usr/bin/trash arrived in macOS 15 and refuses root-owned apps, such as Xcode
+# from the App Store. Finder covers both and can ask for an admin password.
 to_trash() {
-  if [ -x "$ROOT/usr/bin/trash" ]; then
-    "$ROOT/usr/bin/trash" -s "$1" 2>/dev/null
-  else
+  if [ -x "$ROOT/usr/bin/trash" ]; then "$ROOT/usr/bin/trash" -s "$1" 2>/dev/null; fi
+  if [ -e "$1" ] || [ -L "$1" ]; then
     osascript - "$1" >/dev/null 2>&1 <<'EOF'
 on run argv
   tell application "Finder" to delete (POSIX file (item 1 of argv) as alias)
@@ -245,6 +248,10 @@ uninstall_app() {
   if [ -n "$sys" ]; then
     echo "System-wide files stay in place. To remove them yourself:"
     for p in $sys; do printf "  sudo rm -rf %q\n" "$p"; done
+  fi
+  if [ "$id" = com.apple.dt.Xcode ] && [ -d "$HOME/Library/Developer" ]; then
+    echo "Stays in place: $HOME/Library/Developer ($(size_kb "$HOME/Library/Developer" | human))."
+    echo "  It holds simulators and archived builds. For the part Xcode can rebuild: macsweep clean xcode"
   fi
   if [ "$yes" != 1 ]; then confirm "Proceed?" || return 0; fi
 
@@ -276,7 +283,7 @@ cmd_uninstall() {
     p = tolower($2); s = tolower(n)
     if (substr(p, length(p) - length(s) + 1) == s) { print $2; exit }
   }')
-  [ -n "$app" ] || die "no app named $name (Apple's own apps can't be removed)"
+  [ -n "$app" ] || die "no app named $name (of Apple's own apps, only Xcode can be removed)"
   uninstall_app "$app" "$yes"
 }
 
