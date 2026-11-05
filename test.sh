@@ -193,4 +193,35 @@ grep -q "launchctl disable" "$calls" && fail "acted on an odd label"
 "$ms" startup disable com.fake.agent >/dev/null
 grep -q "launchctl disable gui/$(id -u)/com.fake.agent" "$calls" || fail "direct disable failed"
 
+# Maintenance
+stub sudo
+stub diskutil
+stub tmutil 'echo "Snapshot dates for disk /:"; for d in ${SNAPS:-}; do echo "$d"; done'
+ls="$MACSWEEP_ROOT/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support"
+mkdir -p "$ls"; printf '#!/usr/bin/env bash\necho "lsregister $*" >> "$calls"\n' > "$ls/lsregister"; chmod +x "$ls/lsregister"
+
+: > "$calls"
+menu "5\n1\nn\n2\nn\n4\nn\n5\nn\n9\nb\nq\n" >/dev/null
+[ ! -s "$calls" ] || fail "maintenance ran after declining: $(cat "$calls")"
+menu "5\n1\ny\nb\nq\n" >/dev/null
+grep -q "sudo dscacheutil -flushcache" "$calls" || fail "DNS not flushed"
+grep -q "sudo killall -HUP mDNSResponder" "$calls" || fail "mDNSResponder not restarted"
+menu "5\n2\ny\nb\nq\n" >/dev/null
+grep -q "sudo mdutil -E /" "$calls" || fail "Spotlight not rebuilt"
+menu "5\n4\ny\nb\nq\n" >/dev/null
+grep -q "lsregister -r -f -apps local,system,user" "$calls" || fail "Open With not rebuilt"
+menu "5\n5\ny\nb\nq\n" >/dev/null
+grep -q "diskutil verifyVolume /" "$calls" || fail "disk not checked"
+
+menu "5\n3\nb\nq\n" | grep -q "No local snapshots" || fail "empty snapshot list not reported"
+export SNAPS=$'2026-11-01-055050\n2026-11-01-070958'
+: > "$calls"
+menu "5\n3\nn\nb\nq\n" | grep -q "2 local snapshots" || fail "snapshot count not shown"
+grep -q deletelocalsnapshots "$calls" && fail "removed snapshots after declining"
+menu "5\n3\ny\nb\nq\n" >/dev/null
+[ "$(grep -c "sudo tmutil deletelocalsnapshots" "$calls")" = 2 ] || fail "snapshots not removed"
+unset SNAPS
+stub sudo 'exit 1'
+menu "5\n1\ny\nb\nq\n" | grep -q "didn't work" || fail "failed task reported as done"
+
 echo "all tests passed"

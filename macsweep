@@ -6,7 +6,7 @@
 set -uf      # no globbing: every path below is literal
 IFS=$'\n'    # split lists on newlines only, so paths may contain spaces
 
-VERSION="0.1.0"
+VERSION="0.2.0"
 CATEGORIES=$'caches\nlogs\ntrash\nxcode\ndevcaches'
 MENU=0       # 1 when running inside the menu, which is always interactive
 ROOT="${MACSWEEP_ROOT:-}"   # prefix for system folders; lets the tests use a fake one
@@ -34,7 +34,8 @@ Categories:
   xcode      Xcode DerivedData and simulator caches
   devcaches  npm, Gradle and ~/.cache (pip, etc.)
 
-macsweep only touches your own home folder and never needs sudo.
+Cleaning only touches your own home folder and never needs sudo.
+Some Maintenance tasks in the menu ask for your admin password.
 EOF
 }
 
@@ -389,6 +390,21 @@ EOF
   startup_set "$want" "$kind" "$label" "$plist"
 }
 
+flush_dns() { sudo dscacheutil -flushcache && sudo killall -HUP mDNSResponder; }
+
+rebuild_open_with() {
+  "$ROOT/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister" \
+    -r -f -apps local,system,user
+}
+
+remove_snapshots() {
+  local dates="$1" d ok=0
+  for d in $dates; do sudo tmutil deletelocalsnapshots "$d" || ok=1; done
+  return "$ok"
+}
+
+task_result() { if [ "$1" = 0 ]; then echo "  Done."; else echo "  That didn't work."; fi; }
+
 # Prompt into $reply. q quits from any menu, and so does end of input.
 ask() {
   printf "%s" "$1"
@@ -537,6 +553,38 @@ EOF
   done
 }
 
+menu_maintenance() {
+  local dates count
+  while :; do
+    echo
+    echo "  Maintenance"
+    echo "  1  Flush the DNS cache                  (admin password)"
+    echo "  2  Rebuild the Spotlight search index   (admin password)"
+    echo "  3  Remove Time Machine local snapshots  (admin password)"
+    echo "  4  Fix duplicate \"Open With\" entries"
+    echo "  5  Check the startup disk for errors"
+    echo "  b  Back"
+    echo
+    ask "Run which? (number, b to go back): "
+    case "$reply" in
+      b|B) return ;;
+      1) if confirm "Flush the DNS cache?"; then flush_dns; task_result $?; fi ;;
+      2) echo "  Search results will be incomplete and the Mac may run warm until indexing finishes."
+         if confirm "Rebuild the Spotlight index?"; then sudo mdutil -E /; task_result $?; fi ;;
+      3) dates=$(tmutil listlocalsnapshotdates / 2>/dev/null | sed -n '/^[0-9]/p')
+         if [ -z "$dates" ]; then echo "  No local snapshots."; continue; fi
+         count=$(echo "$dates" | wc -l | tr -d ' ')
+         echo "  $count local snapshots, the oldest from $(echo "$dates" | head -n 1)."
+         echo "  This can't be undone. You lose these restore points until Time Machine makes new ones."
+         if confirm "Remove all of them?"; then remove_snapshots "$dates"; task_result $?; fi ;;
+      4) if confirm "Rebuild the Open With list?"; then rebuild_open_with; task_result $?; fi ;;
+      5) echo "  The Mac may pause briefly while the disk is checked."
+         if confirm "Check the startup disk?"; then diskutil verifyVolume /; task_result $?; fi ;;
+      *) echo "  Not a valid choice." ;;
+    esac
+  done
+}
+
 menu_main() {
   local disk
   while :; do
@@ -547,6 +595,7 @@ menu_main() {
     echo "  2  Find large files"
     echo "  3  Applications           (uninstall, updates)"
     echo "  4  Startup items"
+    echo "  5  Maintenance"
     echo "  q  Quit"
     echo
     ask "Choose: "
@@ -555,6 +604,7 @@ menu_main() {
       2) menu_big ;;
       3) menu_apps ;;
       4) menu_startup ;;
+      5) menu_maintenance ;;
       *) echo "  Not a valid choice." ;;
     esac
   done
