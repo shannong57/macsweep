@@ -146,4 +146,51 @@ echo "$out" | grep -q "macOS 99.1" || fail "macOS update missing: $out"
 echo "$out" | grep -q "mas" || fail "no hint for missing mas: $out"
 grep -q "brew upgrade" "$calls" && fail "updates installed something"
 
+# Startup items
+stub launchctl '[ "$1" = print-disabled ] && case "$2" in gui/*) echo "  \"com.fake.off\" => disabled" ;; esac; exit 0'
+stub codesign 'case "$*" in *nosig*) exit 1 ;; *-dv*) echo "Authority=Developer ID Application: Fake Inc. (ABC123)" >&2 ;; esac; exit 0'
+agent() {  # agent DIR LABEL PROGRAM
+  mkdir -p "$1"; printf 'Label=%s\nProgram=%s\n' "$2" "$3" > "$1/$2.plist"
+}
+good="$root/bin/good"; : > "$good"; nosig="$root/bin/nosig"; : > "$nosig"
+UA="$L/LaunchAgents"
+agent "$UA" com.fake.agent "$good"
+agent "$UA" com.fake.off "$good"
+agent "$UA" com.fake.unsigned "$nosig"
+agent "$UA" com.fake.zgone /no/such/program
+agent "$UA" 'com.fake.x;rm' "$good"
+rm "$MACSWEEP_ROOT/Library/LaunchDaemons/com.fake.app.plist"
+agent "$MACSWEEP_ROOT/Library/LaunchDaemons" com.fake.daemon "$good"
+
+out=$(menu "4\nb\nq\n")
+echo "$out" | grep "com.fake.agent" | grep -q "Fake Inc." || fail "signer not shown: $out"
+echo "$out" | grep "com.fake.off" | grep -q "off" || fail "disabled state not shown: $out"
+echo "$out" | grep "com.fake.unsigned" | grep -q "! not signed" || fail "unsigned not flagged: $out"
+echo "$out" | grep "com.fake.zgone" | grep -q "! program missing" || fail "missing not flagged: $out"
+echo "$out" | grep -q "Login Items" || fail "login items pointer missing: $out"
+
+num() { "$ms" startup | awk -v l="$1" 'index($0, l) { print $1; exit }'; }
+: > "$calls"
+menu "4\n$(num com.fake.agent)\nn\nb\nq\n" >/dev/null
+grep -q "launchctl disable" "$calls" && fail "changed an item after declining"
+menu "4\n99\nabc\nb\nq\n" >/dev/null
+grep -q "launchctl disable" "$calls" && fail "bad choice changed an item"
+menu "4\n$(num com.fake.agent)\ny\nb\nq\n" >/dev/null
+grep -q "launchctl disable gui/$(id -u)/com.fake.agent" "$calls" || fail "item not disabled"
+grep -q "launchctl bootout gui/$(id -u)/com.fake.agent" "$calls" || fail "item not stopped"
+menu "4\n$(num com.fake.off)\ny\nb\nq\n" >/dev/null
+grep -q "launchctl enable gui/$(id -u)/com.fake.off" "$calls" || fail "item not enabled"
+
+: > "$calls"
+out=$(menu "4\n$(num com.fake.daemon)\nb\nq\n")
+echo "$out" | grep -q "sudo launchctl disable system/com.fake.daemon" || fail "daemon command not shown: $out"
+grep -q "launchctl disable" "$calls" && fail "changed a system item"
+out=$(menu "4\n$(num 'com.fake.x;rm')\nb\nq\n")
+echo "$out" | grep -q "unusual" || fail "odd label not refused: $out"
+grep -q "launchctl disable" "$calls" && fail "acted on an odd label"
+"$ms" startup disable com.fake.nope 2>/dev/null && fail "accepted unknown item"
+"$ms" startup bogus 2>/dev/null && fail "accepted unknown startup action"
+"$ms" startup disable com.fake.agent >/dev/null
+grep -q "launchctl disable gui/$(id -u)/com.fake.agent" "$calls" || fail "direct disable failed"
+
 echo "all tests passed"
