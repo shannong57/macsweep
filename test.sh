@@ -238,4 +238,50 @@ unset SNAPS
 stub sudo 'exit 1'
 menu "5\n1\ny\nb\nq\n" | grep -q "didn't work" || fail "failed task reported as done"
 
+# Security check
+stub spctl 'echo "assessments disabled"'
+stub csrutil 'echo "System Integrity Protection status: enabled."'
+stub fdesetup 'echo "FileVault is On."'
+stub profiles 'echo "There are no configuration profiles installed for user x"'
+fw="$MACSWEEP_ROOT/usr/libexec/ApplicationFirewall/socketfilterfw"
+mkdir -p "$(dirname "$fw")"; printf '#!/usr/bin/env bash\necho "Firewall is disabled. (State = 0)"\n' > "$fw"; chmod +x "$fw"
+app "$A" nosig com.fake.nosig 1000
+agent "$MACSWEEP_ROOT/Library/LaunchDaemons" com.fake.baddaemon /no/such/program
+agent "$UA" com.fake.real "$nosig"
+
+out=$("$ms" security)
+echo "$out" | grep -q "!   Gatekeeper is off" || fail "Gatekeeper off not flagged: $out"
+echo "$out" | grep -q "ok  FileVault is on" || fail "FileVault on not shown: $out"
+echo "$out" | grep -q "!   Firewall is off" || fail "disabled firewall read as on: $out"
+echo "$out" | grep -q "ok  None installed" || fail "profiles not read: $out"
+echo "$out" | grep "nosig.app" | grep -q "! not signed" || fail "unsigned app not flagged: $out"
+echo "$out" | grep -q "Stuck.app" && fail "signed app flagged: $out"
+echo "$out" | grep -q "com.fake.unsigned" || fail "flagged startup item missing: $out"
+echo "$out" | grep -q "com.fake.agent" && fail "good startup item flagged: $out"
+echo "$out" | grep -q "not a malware scan" || fail "no malware scan disclaimer"
+echo "$out" | grep -qi "no malware\|clean bill\|you are safe" && fail "report claims safety: $out"
+
+stub profiles 'echo "There are 2 user configuration profiles installed for x"'
+"$ms" security | grep -q "!   Profiles are installed" || fail "profiles not flagged"
+stub profiles 'exit 1'
+"$ms" security | grep -q "?   Couldn" || fail "failed profile check read as fine"
+stub spctl 'exit 1'
+"$ms" security | grep -q "?   Gatekeeper" || fail "failed Gatekeeper check read as fine"
+
+snum() { "$ms" security | awk -v l="$1" 'index($0, l) { print $1; exit }'; }
+: > "$calls"
+menu "6\n99\n0\nabc\nb\nq\n" >/dev/null
+[ -f "$UA/com.fake.unsigned.plist" ] || fail "bad choice removed an item"
+menu "6\n$(snum com.fake.unsigned)\nn\nb\nq\n" >/dev/null
+[ -f "$UA/com.fake.unsigned.plist" ] || fail "removed an item after declining"
+grep -q "launchctl disable" "$calls" && fail "changed an item after declining"
+out=$(menu "6\n$(snum com.fake.real)\ny\nb\nq\n")
+[ ! -e "$UA/com.fake.real.plist" ] || fail "item not moved to Trash: $out"
+grep -q "launchctl disable gui/$(id -u)/com.fake.real" "$calls" || fail "item not turned off"
+[ -f "$nosig" ] || fail "removed the program itself"
+echo "$out" | grep -q "still at $nosig" || fail "program location not shown: $out"
+out=$(menu "6\n$(snum com.fake.baddaemon)\nb\nq\n")
+[ -f "$MACSWEEP_ROOT/Library/LaunchDaemons/com.fake.baddaemon.plist" ] || fail "touched a system-wide item"
+echo "$out" | grep -q "sudo rm" || fail "no sudo command for system-wide item: $out"
+
 echo "all tests passed"
