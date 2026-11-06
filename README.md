@@ -37,7 +37,7 @@ With Homebrew:
 
 ```sh
 brew tap shannong57/macsweep https://github.com/shannong57/macsweep
-brew install macsweep
+brew install shannong57/macsweep/macsweep
 ```
 
 Or without it:
