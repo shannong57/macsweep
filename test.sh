@@ -82,9 +82,10 @@ stub ps 'echo "${PS_OUT:-}"; /bin/ps -axo command= 2>/dev/null || true'
 cat > "$MACSWEEP_ROOT/usr/bin/trash" <<'S'
 #!/usr/bin/env bash
 shift
-for f in "$@"; do case "$f" in *Stuck*) exit 1 ;; esac; mv "$f" "$trashed/$(basename "$f")-$RANDOM"; done
+for f in "$@"; do case "$f" in *Stuck*|*Xcode.app) exit 1 ;; esac; mv "$f" "$trashed/$(basename "$f")-$RANDOM"; done
 S
 chmod +x "$MACSWEEP_ROOT/usr/bin/trash"
+stub osascript 'case "$2" in *Stuck*) exit 1 ;; esac; mv "$2" "$trashed/$(basename "$2")-$RANDOM"'
 export PATH="$root/bin:$PATH"
 
 app() {  # app DIR NAME ID SIZE
@@ -137,6 +138,19 @@ done
 [ -f "$MACSWEEP_ROOT/Library/LaunchDaemons/com.fake.app.plist" ] || fail "touched a system file"
 echo "$out" | grep -q "sudo rm -rf" || fail "system leftover not listed"
 echo "$out" | grep -q "Moved" || fail "no result message"
+
+# Xcode is the one Apple app that can go. The trash stub refuses it, like a root-owned app, so Finder takes over.
+app "$A" Xcode com.apple.dt.Xcode 5000
+mk "$L/Preferences/com.apple.dt.Xcode.plist"
+mk "$L/Developer/Xcode/Archives/keep"
+: > "$calls"
+out=$("$ms" uninstall xcode --yes)
+[ ! -e "$A/Xcode.app" ] || fail "Xcode not removed: $out"
+grep -q "osascript" "$calls" || fail "Finder not tried after trash refused"
+[ ! -e "$L/Preferences/com.apple.dt.Xcode.plist" ] || fail "Xcode leftover kept"
+[ -f "$L/Developer/Xcode/Archives/keep" ] || fail "removed archived builds"
+echo "$out" | grep -q "Library/Developer" || fail "Developer folder not mentioned: $out"
+[ -d "$A/Thing.app" ] || fail "other Apple app removed"
 
 stub brew '[ "$1" = outdated ] && echo "git (2.1) < 2.2"'
 stub softwareupdate 'printf "Software Update found:\n* Label: macOS 99.1\n\tTitle: macOS\n"'
