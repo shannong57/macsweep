@@ -33,6 +33,15 @@ Every list works the same way: type a number, confirm, and you return to that me
 
 ## Install
 
+With Homebrew:
+
+```sh
+brew tap shannong57/macsweep https://github.com/shannong57/macsweep
+brew install macsweep
+```
+
+Or without it:
+
 ```sh
 curl -fsSL https://raw.githubusercontent.com/shannong57/macsweep/main/macsweep -o /usr/local/bin/macsweep
 chmod +x /usr/local/bin/macsweep
