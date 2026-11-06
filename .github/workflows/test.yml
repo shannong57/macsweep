@@ -1,0 +1,21 @@
+name: test
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Use stock Bash 3.2 for everything
+        run: echo "PATH=/bin:$PATH" >> "$GITHUB_ENV"
+      - run: env bash --version | head -n 1
+      - run: bash test.sh
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: shellcheck macsweep test.sh
