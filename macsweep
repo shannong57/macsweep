@@ -6,8 +6,9 @@
 set -uf      # no globbing: every path below is literal
 IFS=$'\n'    # split lists on newlines only, so paths may contain spaces
 
-VERSION="0.4.0"
+VERSION="0.5.0"
 CATEGORIES=$'caches\nlogs\ntrash\nxcode\ndevcaches'
+OPTIN=backups   # cleaned only when named: never part of "clean all"
 MENU=0       # 1 when running inside the menu, which is always interactive
 ROOT="${MACSWEEP_ROOT:-}"   # prefix for system folders; lets the tests use a fake one
 
@@ -34,6 +35,7 @@ Categories:
   trash      ~/.Trash
   xcode      Xcode DerivedData and simulator caches
   devcaches  npm, Gradle and ~/.cache (pip, etc.)
+  backups    iPhone and iPad backups. Only when named; never part of "clean all"
 
 Cleaning only touches your own home folder and never needs sudo.
 Some Maintenance tasks in the menu ask for your admin password.
@@ -47,7 +49,12 @@ targets() {
     logs)      echo "$HOME/Library/Logs" ;;
     trash)     echo "$HOME/.Trash" ;;
     xcode)     echo "$HOME/Library/Developer/Xcode/DerivedData"
-               echo "$HOME/Library/Developer/CoreSimulator/Caches" ;;
+               echo "$HOME/Library/Developer/CoreSimulator/Caches"
+               echo "$HOME/Library/Developer/Xcode/iOS DeviceSupport"
+               echo "$HOME/Library/Developer/Xcode/watchOS DeviceSupport"
+               echo "$HOME/Library/Developer/Xcode/tvOS DeviceSupport"
+               echo "$HOME/Library/Developer/Xcode/visionOS DeviceSupport" ;;
+    backups)   echo "$HOME/Library/Application Support/MobileSync/Backup" ;;
     devcaches) echo "$HOME/.npm/_cacache"
                echo "$HOME/.gradle/caches"
                echo "$HOME/.cache" ;;
@@ -112,6 +119,8 @@ cmd_scan() {
     fi
   done
   printf "  %-10s %8s\n" "TOTAL" "$(echo "$grand" | human)"
+  kb=$(category_kb backups)
+  [ "$kb" -gt 0 ] && printf "  %-10s %8s  (not in TOTAL: only cleaned when named)\n" backups "$(echo "$kb" | human)"
   echo
   [ "$any_blocked" = 1 ] && echo "Some folders are protected by macOS. $FDA_HINT"
   echo "Run 'macsweep clean' to reclaim it, or 'macsweep clean --dry-run' to preview."
@@ -124,7 +133,7 @@ cmd_clean() {
       -n|--dry-run) dry=1 ;;
       -y|--yes)     yes=1 ;;
       -*) die "unknown option: $1" ;;
-      *) targets "$1" >/dev/null || die "unknown category: $1 (try: caches logs trash xcode devcaches)"
+      *) targets "$1" >/dev/null || die "unknown category: $1 (try: caches logs trash xcode devcaches backups)"
          cats="$cats$1"$'\n' ;;
     esac
     shift
@@ -139,6 +148,9 @@ cmd_clean() {
       printf "  %8s  %s\n" "$(size_kb "$d" | human)" "$d"
     done
   done
+  case $'\n'"$cats" in *$'\n'backups$'\n'*)
+    echo "  iPhone and iPad backups may be the only copy of a device. They are deleted, not moved to the Trash." ;;
+  esac
   if [ "$dry" = 1 ]; then echo "(dry run — nothing deleted)"; return 0; fi
 
   if [ "$yes" != 1 ]; then
@@ -181,12 +193,13 @@ cmd_big() {
 
 plist_get() { plutil -extract "$2" raw -o - "$1" 2>/dev/null; }
 
-# "KB<tab>path" per app, biggest first. Apple's own apps are left out, except Xcode.
+# "KB<tab>path" per app, biggest first. Apple's own apps are left out, except Xcode
+# and macOS installers.
 list_apps() {
   local a
   for a in $(find "$ROOT/Applications" "$HOME/Applications" -maxdepth 2 -name "*.app" -prune 2>/dev/null); do
     case "$(plist_get "$a/Contents/Info.plist" CFBundleIdentifier)" in
-      com.apple.dt.Xcode) ;;
+      com.apple.dt.Xcode|com.apple.InstallAssistant.*) ;;
       com.apple.*) continue ;;
     esac
     printf "%s\t%s\n" "$(size_kb "$a")" "$a"
@@ -284,7 +297,7 @@ cmd_uninstall() {
     p = tolower($2); s = tolower(n)
     if (substr(p, length(p) - length(s) + 1) == s) { print $2; exit }
   }')
-  [ -n "$app" ] || die "no app named $name (of Apple's own apps, only Xcode can be removed)"
+  [ -n "$app" ] || die "no app named $name (of Apple's own apps, only Xcode and macOS installers can be removed)"
   uninstall_app "$app" "$yes"
 }
 
@@ -570,6 +583,7 @@ cat_label() {
     trash)  echo "Trash" ;;
     xcode)  echo "Xcode" ;;
     devcaches) echo "Dev caches" ;;
+    backups) echo "iPhone backups" ;;
   esac
 }
 
@@ -589,25 +603,25 @@ pick() {  # pick LIST INPUT
 }
 
 menu_clean() {
-  local cat i picked
+  local cat i picked all="$CATEGORIES"$'\n'"$OPTIN"
   while :; do
     echo; echo "  Clean up junk — scanning..."
     i=0
-    for cat in $CATEGORIES; do
+    for cat in $all; do
       i=$((i + 1))
       if category_blocked "$cat"; then
-        printf "  %s  %-12s (no access, needs Full Disk Access)\n" "$i" "$(cat_label "$cat")"
+        printf "  %s  %-15s (no access, needs Full Disk Access)\n" "$i" "$(cat_label "$cat")"
       else
-        printf "  %s  %-12s %8s\n" "$i" "$(cat_label "$cat")" "$(category_kb "$cat" | human)"
+        printf "  %s  %-15s %8s\n" "$i" "$(cat_label "$cat")" "$(category_kb "$cat" | human)"
       fi
     done
-    echo "  a  All     b  Back"
+    echo "  a  All except iPhone backups     b  Back"
     echo
     ask "Clean which? (numbers, a for all, b to go back): "
     case "$reply" in
       b|B) return ;;
       a|A) picked="$CATEGORIES" ;;
-      *) picked=$(pick "$CATEGORIES" "$reply") || { echo "  Not a valid choice."; continue; } ;;
+      *) picked=$(pick "$all" "$reply") || { echo "  Not a valid choice."; continue; } ;;
     esac
     # shellcheck disable=SC2086  # one category per line, split on IFS
     cmd_clean $picked
@@ -715,6 +729,9 @@ menu_maintenance() {
     echo "  3  Remove Time Machine local snapshots  (admin password)"
     echo "  4  Fix duplicate \"Open With\" entries"
     echo "  5  Check the startup disk for errors"
+    echo "  6  Clean up Homebrew                    (old versions and downloads)"
+    echo "  7  Delete unavailable Xcode simulators"
+    echo "  8  Clean up Docker                      (stopped containers, unused images)"
     echo "  b  Back"
     echo
     ask "Run which? (number, b to go back): "
@@ -732,6 +749,17 @@ menu_maintenance() {
       4) if confirm "Rebuild the Open With list?"; then rebuild_open_with; task_result $?; fi ;;
       5) echo "  The Mac may pause briefly while the disk is checked."
          if confirm "Check the startup disk?"; then diskutil verifyVolume /; task_result $?; fi ;;
+      6) if ! command -v brew >/dev/null; then echo "  Homebrew isn't installed."; continue; fi
+         brew cleanup -n 2>/dev/null | tail -n 1 | sed 's/^==> /  /'
+         if confirm "Clean up Homebrew?"; then brew cleanup; task_result $?; fi ;;
+      7) # xcode-select first: a bare xcrun offers to install the developer tools.
+         if ! xcode-select -p >/dev/null 2>&1; then echo "  Xcode isn't installed."; continue; fi
+         echo "  Removes simulators for iOS versions this Xcode no longer has."
+         if confirm "Delete unavailable simulators?"; then xcrun simctl delete unavailable; task_result $?; fi ;;
+      8) if ! command -v docker >/dev/null; then echo "  Docker isn't installed."; continue; fi
+         echo "  Deletes stopped containers, unused networks, dangling images and the build cache."
+         echo "  Docker must be running. Volumes are kept."
+         if confirm "Clean up Docker?"; then docker system prune -f; task_result $?; fi ;;
       *) echo "  Not a valid choice." ;;
     esac
   done

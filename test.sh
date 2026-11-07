@@ -332,4 +332,37 @@ grep -qx "google.com" "$AS/macsweep/keep-sites" && fail "site not removed from k
 menu "7\n$(pnum default-release)\n1\ny\nb\nb\nq\n" >/dev/null
 [ "$(sqlite3 "$FF/cookies.sqlite" "SELECT count(*) FROM moz_cookies")" = 1 ] || fail "Firefox cookie not removed"
 
+# Junk categories and cleanup tasks
+mk "$HOME/Library/Developer/Xcode/iOS DeviceSupport/17.0/x"
+B="$HOME/Library/Application Support/MobileSync/Backup"; mk "$B/abc/Info.plist"
+"$ms" scan | grep -q "backups.*not in TOTAL" || fail "backups not shown apart in scan"
+"$ms" clean --yes >/dev/null
+[ -f "$B/abc/Info.plist" ] || fail "clean all deleted iPhone backups"
+[ ! -e "$HOME/Library/Developer/Xcode/iOS DeviceSupport/17.0" ] || fail "device support not cleared"
+menu "1\na\ny\nb\nq\n" >/dev/null
+[ -f "$B/abc/Info.plist" ] || fail "menu all deleted iPhone backups"
+"$ms" clean backups --yes | grep -q "only copy" || fail "no backup warning"
+[ ! -e "$B/abc" ] || fail "backups not cleared when named"
+
+app "$A" "Install macOS Test" com.apple.InstallAssistant.macOSTest 1000
+"$ms" uninstall "Install macOS Test" --yes >/dev/null
+[ ! -e "$A/Install macOS Test.app" ] || fail "macOS installer not removable"
+
+stub sudo '"$@"'
+stub brew '[ "$1" = cleanup ] && [ "${2:-}" = -n ] && echo "==> This operation would free approximately 9MB of disk space."; exit 0'
+stub xcode-select 'echo /Applications/Xcode.app/Contents/Developer'
+stub xcrun ''
+stub docker ''
+: > "$calls"
+menu "5\n6\nn\n7\nn\n8\nn\nb\nq\n" | grep -q "free approximately 9MB" || fail "Homebrew estimate not shown"
+grep -qE "brew cleanup$|simctl delete|docker system" "$calls" && fail "cleanup ran after declining"
+menu "5\n6\ny\n7\ny\n8\ny\nb\nq\n" >/dev/null
+grep -qx "brew cleanup" "$calls" || fail "brew cleanup not run"
+grep -q "xcrun simctl delete unavailable" "$calls" || fail "simulators not cleaned"
+grep -q "docker system prune -f" "$calls" || fail "docker not cleaned"
+stub xcode-select 'exit 2'
+: > "$calls"
+menu "5\n7\nb\nq\n" | grep -q "Xcode isn't installed" || fail "missing Xcode not reported"
+grep -q xcrun "$calls" && fail "ran xcrun without Xcode"
+
 echo "all tests passed"
