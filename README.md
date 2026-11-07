@@ -14,6 +14,7 @@ $ macsweep
   3  Applications           (uninstall, updates)
   4  Startup items
   5  Maintenance
+  6  Security check
   q  Quit
 
 Choose: 1
@@ -56,6 +57,7 @@ Or clone the repo and put `macsweep` anywhere on your `PATH`.
 - **Applications:** uninstall an app and its leftover files, or see what's outdated across Homebrew, the App Store (needs the free `mas` tool) and macOS. Updates are report only, and apps that update themselves, like Chrome or Zoom, aren't covered.
 - **Startup items:** see what launches in the background and who signed it. `!` marks programs that are unsigned, damaged or missing. Login items stay in System Settings.
 - **Maintenance:** flush DNS, rebuild Spotlight, remove Time Machine local snapshots, fix duplicate "Open With" entries, and check the startup disk.
+- **Security check:** see whether Gatekeeper, System Integrity Protection, FileVault and the firewall are on, and flag configuration profiles, unsigned apps and suspect startup items. You can turn off a flagged startup item and move it to the Trash. This is not a malware scan: it checks settings and signatures only.
 
 ## Commands for scripts
 
@@ -68,6 +70,7 @@ Everything in the menu that can run unattended also has a direct command.
 | `macsweep clean [CATEGORY...]` | Delete junk, asking first. `--dry-run` previews, `--yes` skips the prompt |
 | `macsweep big [PATH] [--min MB]` | List the 20 largest files (report only, never deletes) |
 | `macsweep uninstall APP [--yes]` | Move an app and its leftovers to the Trash |
+| `macsweep security` | Report on security settings, app signatures and startup items |
 | `macsweep updates` | List what's outdated (report only) |
 | `macsweep startup` | List startup items |
 | `macsweep startup enable\|disable LABEL` | Turn one of the startup agents on or off |
