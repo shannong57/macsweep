@@ -17,6 +17,7 @@ $ macsweep
   6  Security check
   7  Browser cleanup        (cookies, site by site)
   8  Performance check
+  9  Tweaks                 (hidden settings)
   q  Quit
 
 Choose: 1
@@ -62,6 +63,7 @@ Or clone the repo and put `macsweep` anywhere on your `PATH`.
 - **Security check:** see whether Gatekeeper, System Integrity Protection, FileVault and the firewall are on, and flag configuration profiles, unsigned apps and suspect startup items. You can turn off a flagged startup item and move it to the Trash. This is not a malware scan: it checks settings and signatures only.
 - **Browser cleanup:** remove cookies site by site in Chrome, Edge, Brave, Arc, Vivaldi and Firefox, and keep a list of sites to always keep, such as your bank and email. The browser must be closed. Removed cookies sign you out of those sites and can't be restored. Passwords, history and bookmarks are never touched. Safari isn't supported: use Safari > Settings > Privacy > Manage Website Data.
 - **Performance check:** the apps using the most CPU and memory right now, plus memory pressure, swap, overheating, free disk space and time since the last restart. Report only.
+- **Tweaks:** turn hidden macOS settings on or off: no `.DS_Store` files on network drives, an instant Dock, fewer animations, hidden files and the path bar in Finder, and faster Time Machine backups until the next restart. Each shows whether it's on, and turning it off puts back Apple's default. Turning off Gatekeeper or System Integrity Protection is left out on purpose.
 
 ## Commands for scripts
 

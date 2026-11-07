@@ -56,7 +56,7 @@ menu "1\n   \nb\nq\n" >/dev/null; kept "blank selection cleaned something"
 menu "1\n9\n0\nx\n1 9\nb\nq\n" >/dev/null; kept "bad selection cleaned something"
 menu "1\n1\nn\nb\nq\n" >/dev/null; kept "declining cleaned something"
 menu "1\n1\n" >/dev/null; kept "end of input cleaned something"
-menu "9\nq\n" | grep -q "Not a valid choice" || fail "bad main choice not rejected"
+menu "x\nq\n" | grep -q "Not a valid choice" || fail "bad main choice not rejected"
 
 menu "1\n1\ny\nb\nq\n" >/dev/null
 [ ! -e "$HOME/Library/Caches/a" ] || fail "menu did not clean caches"
@@ -390,5 +390,39 @@ echo "$out" | grep -q "?   Couldn't read memory pressure" || fail "unreadable pr
 echo "$out" | grep -q "?   Couldn't read the temperature" || fail "unreadable heat shown as fine: $out"
 menu "8\n\nq\n" | grep -q "Using the most memory" || fail "menu performance missing"
 unset PS_OUT
+
+# Tweaks
+store="$root/defaults"; : > "$store"; export store
+stub defaults 'case "$1" in
+  read) v=$(grep -F "$2 $3=" "$store" | tail -n 1 | cut -d= -f2-); [ -n "$v" ] || exit 1
+        case "$v" in true) v=1 ;; false) v=0 ;; esac; echo "$v" ;;
+  write) grep -vF "$2 $3=" "$store" > "$store.new"; mv "$store.new" "$store"; echo "$2 $3=$5" >> "$store" ;;
+  delete) grep -qF "$2 $3=" "$store" || exit 1; grep -vF "$2 $3=" "$store" > "$store.new"; mv "$store.new" "$store" ;;
+esac'
+stub killall ''
+stub sysctl '[ "$1" = -n ] && echo "${THROTTLE:-1}"; exit 0'
+tnum() { menu "9\nb\nq\n" | awk -v l="$1" 'index($0, l) { print $1; exit }'; }
+echo "com.apple.finder ShowPathbar=true" >> "$store"
+out=$(menu "9\nb\nq\n")
+echo "$out" | grep "path bar" | grep -q " on " || fail "existing setting not shown as on: $out"
+echo "$out" | grep "hidden files" | grep -q " off " || fail "unset tweak not shown as off: $out"
+echo "$out" | grep -q "Gatekeeper" || fail "security note missing"
+: > "$calls"
+menu "9\n$(tnum "hidden files")\nn\nb\nq\n" >/dev/null
+grep -q "defaults write" "$calls" && fail "changed a setting after declining"
+menu "9\n$(tnum "hidden files")\ny\nb\nq\n" >/dev/null
+grep -q "defaults write com.apple.finder AppleShowAllFiles -bool true" "$calls" || fail "tweak not written"
+grep -q "killall Finder" "$calls" || fail "Finder not restarted"
+menu "9\n$(tnum "Dock appears")\ny\nb\nq\n" >/dev/null
+grep -q "defaults write com.apple.dock autohide-delay -float 0" "$calls" || fail "float tweak not written"
+menu "9\n$(tnum "Dock appears")\nb\nq\n" | grep "Dock appears" | grep -q " on " || fail "float tweak not read back as on"
+menu "9\n$(tnum "hidden files")\ny\nb\nq\n" >/dev/null
+grep -q "defaults delete com.apple.finder AppleShowAllFiles" "$calls" || fail "default not restored"
+grep -qF "AppleShowAllFiles=" "$store" && fail "tweak still set after restoring"
+menu "9\n99\nx\n0\nb\nq\n" | grep -q "Not a valid choice" || fail "bad tweak choice not rejected"
+menu "9\n$(tnum "Time Machine")\ny\nb\nq\n" >/dev/null
+grep -q "sudo sysctl debug.lowpri_throttle_enabled=0" "$calls" || fail "Time Machine not sped up"
+THROTTLE=0 menu "9\n$(tnum "Time Machine")\ny\nb\nq\n" >/dev/null
+grep -q "sudo sysctl debug.lowpri_throttle_enabled=1" "$calls" || fail "Time Machine not put back"
 
 echo "all tests passed"

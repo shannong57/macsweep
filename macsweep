@@ -6,7 +6,7 @@
 set -uf      # no globbing: every path below is literal
 IFS=$'\n'    # split lists on newlines only, so paths may contain spaces
 
-VERSION="0.6.0"
+VERSION="0.7.0"
 CATEGORIES=$'caches\nlogs\ntrash\nxcode\ndevcaches'
 OPTIN=backups   # cleaned only when named: never part of "clean all"
 MENU=0       # 1 when running inside the menu, which is always interactive
@@ -614,6 +614,25 @@ cmd_performance() {
   echo "  This is a snapshot of right now. Apps that start at login are in Startup items."
 }
 
+# Hidden settings: label, domain, key, type, value when on, app to restart.
+# Turning one off deletes the key, which puts back Apple's default.
+TWEAKS=$'Faster network folders: no .DS_Store files on shared drives\tcom.apple.desktopservices\tDSDontWriteNetworkStores\tbool\ttrue\t-
+Dock appears instantly when auto-hidden\tcom.apple.dock\tautohide-delay\tfloat\t0\tDock
+No window opening animations\tNSGlobalDomain\tNSAutomaticWindowAnimationsEnabled\tbool\tfalse\t-
+No Finder animations\tcom.apple.finder\tDisableAllAnimations\tbool\ttrue\tFinder
+Show hidden files in Finder\tcom.apple.finder\tAppleShowAllFiles\tbool\ttrue\tFinder
+Show the folder path bar in Finder\tcom.apple.finder\tShowPathbar\tbool\ttrue\tFinder'
+
+tweak_on() {  # tweak_on DOMAIN KEY TYPE VALUE
+  local cur want="$4"
+  cur=$(defaults read "$1" "$2" 2>/dev/null) || return 1
+  case "$3:$want" in bool:true) want=1 ;; bool:false) want=0 ;; esac
+  [ "$cur" = "$want" ]
+}
+
+# Backups run slowly by design so they don't get in the way. Resets at restart.
+tm_fast() { [ "$(sysctl -n debug.lowpri_throttle_enabled 2>/dev/null)" = 0 ]; }
+
 flush_dns() { sudo dscacheutil -flushcache && sudo killall -HUP mDNSResponder; }
 
 rebuild_open_with() {
@@ -933,6 +952,57 @@ menu_browser() {
   done
 }
 
+menu_tweaks() {
+  local i label d k t v app state n
+  while :; do
+    echo
+    echo "  Tweaks: hidden macOS settings. Each can be put back to Apple's default here."
+    i=0
+    echo "$TWEAKS" | while IFS=$'\t' read -r label d k t v app; do
+      i=$((i + 1)); state=off
+      if tweak_on "$d" "$k" "$t" "$v"; then state=on; fi
+      printf "  %s  %-4s %s\n" "$i" "$state" "$label"
+    done
+    n=$(echo "$TWEAKS" | wc -l | tr -d ' ')
+    state=off; if tm_fast; then state=on; fi
+    printf "  %s  %-4s %s\n" "$((n + 1))" "$state" "Faster Time Machine backups until restart (admin password)"
+    echo "  b  Back"
+    echo
+    echo "  Some changes show up after you log out and back in."
+    echo "  Not here on purpose: turning off Gatekeeper or System Integrity Protection. That costs"
+    echo "  security and doesn't make a modern Mac faster."
+    echo
+    ask "Turn which on or off? (number, b to go back): "
+    case "$reply" in
+      b|B|"") return ;;
+      *[!0-9]*|0) echo "  Not a valid choice."; continue ;;
+    esac
+    if [ "$reply" = "$((n + 1))" ]; then
+      if tm_fast; then
+        confirm "Put Time Machine back to its normal background speed?" || continue
+        sudo sysctl debug.lowpri_throttle_enabled=1 >/dev/null; task_result $?
+      else
+        echo "  Backups use more disk and CPU until you restart or turn this off."
+        confirm "Speed up Time Machine backups?" || continue
+        sudo sysctl debug.lowpri_throttle_enabled=0 >/dev/null; task_result $?
+      fi
+      continue
+    fi
+    IFS=$'\t' read -r label d k t v app <<EOF
+$(echo "$TWEAKS" | sed -n "${reply}p")
+EOF
+    [ -n "$label" ] || { echo "  Not a valid choice."; continue; }
+    if tweak_on "$d" "$k" "$t" "$v"; then
+      confirm "Put \"$label\" back to Apple's default?" || continue
+      defaults delete "$d" "$k" 2>/dev/null; task_result $?
+    else
+      confirm "Turn on \"$label\"?" || continue
+      defaults write "$d" "$k" "-$t" "$v"; task_result $?
+    fi
+    if [ "$app" != - ]; then killall "$app" 2>/dev/null; fi
+  done
+}
+
 menu_main() {
   local disk
   while :; do
@@ -947,6 +1017,7 @@ menu_main() {
     echo "  6  Security check"
     echo "  7  Browser cleanup        (cookies, site by site)"
     echo "  8  Performance check"
+    echo "  9  Tweaks                 (hidden settings)"
     echo "  q  Quit"
     echo
     ask "Choose: "
@@ -959,6 +1030,7 @@ menu_main() {
       6) menu_security ;;
       7) menu_browser ;;
       8) echo; cmd_performance; echo; ask "Press Enter to go back: " ;;
+      9) menu_tweaks ;;
       *) echo "  Not a valid choice." ;;
     esac
   done
