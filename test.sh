@@ -365,4 +365,30 @@ stub xcode-select 'exit 2'
 menu "5\n7\nb\nq\n" | grep -q "Xcode isn't installed" || fail "missing Xcode not reported"
 grep -q xcrun "$calls" && fail "ran xcrun without Xcode"
 
+# Performance check
+stub sysctl 'case "$2" in
+  kern.memorystatus_vm_pressure_level) echo 2 ;;
+  vm.swapusage) echo "total = 4096.00M  used = 2048.50M  free = 2047.50M  (encrypted)" ;;
+  kern.boottime) echo "{ sec = $(( $(date +%s) - 20 * 86400 )), usec = 0 } Mon Nov  2 08:13:22 2026" ;;
+esac'
+stub pmset 'echo "CPU_Speed_Limit = 70"'
+export PS_OUT=" 50.0 /Applications/Foo Bar.app/Contents/MacOS/Foo Bar
+ 30.0 /Applications/Foo Bar.app/Contents/Frameworks/Helper (Renderer).app/Contents/MacOS/Helper (Renderer)
+ 10.0 /usr/sbin/bard"
+out=$("$ms" performance)
+echo "$out" | grep -q "80.0%  Foo Bar" || fail "helpers not grouped under their app: $out"
+echo "$out" | grep -q "Helper" && fail "helper listed on its own: $out"
+echo "$out" | grep -q "10.0%  bard" || fail "plain process missing: $out"
+echo "$out" | grep -q "!   Memory pressure is high" || fail "pressure not flagged: $out"
+echo "$out" | grep -q "!   Using 2.0G of swap" || fail "swap not flagged: $out"
+echo "$out" | grep -q "!   Running hot" || fail "heat not flagged: $out"
+echo "$out" | grep -q "20 days ago" || fail "uptime not shown: $out"
+echo "$out" | grep -q "disk free\|free. macOS" || fail "disk not shown: $out"
+stub sysctl 'exit 1'; stub pmset 'exit 1'
+out=$("$ms" performance)
+echo "$out" | grep -q "?   Couldn't read memory pressure" || fail "unreadable pressure shown as fine: $out"
+echo "$out" | grep -q "?   Couldn't read the temperature" || fail "unreadable heat shown as fine: $out"
+menu "8\n\nq\n" | grep -q "Using the most memory" || fail "menu performance missing"
+unset PS_OUT
+
 echo "all tests passed"

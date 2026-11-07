@@ -16,6 +16,7 @@ $ macsweep
   5  Maintenance
   6  Security check
   7  Browser cleanup        (cookies, site by site)
+  8  Performance check
   q  Quit
 
 Choose: 1
@@ -60,6 +61,7 @@ Or clone the repo and put `macsweep` anywhere on your `PATH`.
 - **Maintenance:** flush DNS, rebuild Spotlight, remove Time Machine local snapshots, fix duplicate "Open With" entries, check the startup disk, and clean up Homebrew, unavailable Xcode simulators and Docker.
 - **Security check:** see whether Gatekeeper, System Integrity Protection, FileVault and the firewall are on, and flag configuration profiles, unsigned apps and suspect startup items. You can turn off a flagged startup item and move it to the Trash. This is not a malware scan: it checks settings and signatures only.
 - **Browser cleanup:** remove cookies site by site in Chrome, Edge, Brave, Arc, Vivaldi and Firefox, and keep a list of sites to always keep, such as your bank and email. The browser must be closed. Removed cookies sign you out of those sites and can't be restored. Passwords, history and bookmarks are never touched. Safari isn't supported: use Safari > Settings > Privacy > Manage Website Data.
+- **Performance check:** the apps using the most CPU and memory right now, plus memory pressure, swap, overheating, free disk space and time since the last restart. Report only.
 
 ## Commands for scripts
 
@@ -73,6 +75,7 @@ Everything in the menu that can run unattended also has a direct command.
 | `macsweep big [PATH] [--min MB]` | List the 20 largest files (report only, never deletes) |
 | `macsweep uninstall APP [--yes]` | Move an app and its leftovers to the Trash |
 | `macsweep security` | Report on security settings, app signatures and startup items |
+| `macsweep performance` | Report what's using CPU, memory and disk right now |
 | `macsweep updates` | List what's outdated (report only) |
 | `macsweep startup` | List startup items |
 | `macsweep startup enable\|disable LABEL` | Turn one of the startup agents on or off |
