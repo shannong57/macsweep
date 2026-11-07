@@ -56,7 +56,7 @@ menu "1\n   \nb\nq\n" >/dev/null; kept "blank selection cleaned something"
 menu "1\n9\n0\nx\n1 9\nb\nq\n" >/dev/null; kept "bad selection cleaned something"
 menu "1\n1\nn\nb\nq\n" >/dev/null; kept "declining cleaned something"
 menu "1\n1\n" >/dev/null; kept "end of input cleaned something"
-menu "7\nq\n" | grep -q "Not a valid choice" || fail "bad main choice not rejected"
+menu "9\nq\n" | grep -q "Not a valid choice" || fail "bad main choice not rejected"
 
 menu "1\n1\ny\nb\nq\n" >/dev/null
 [ ! -e "$HOME/Library/Caches/a" ] || fail "menu did not clean caches"
@@ -283,5 +283,53 @@ echo "$out" | grep -q "still at $nosig" || fail "program location not shown: $ou
 out=$(menu "6\n$(snum com.fake.baddaemon)\nb\nq\n")
 [ -f "$MACSWEEP_ROOT/Library/LaunchDaemons/com.fake.baddaemon.plist" ] || fail "touched a system-wide item"
 echo "$out" | grep -q "sudo rm" || fail "no sudo command for system-wide item: $out"
+
+# Browser cleanup. Only the fake process list here: a real open Chrome would block these tests.
+stub ps 'echo "${PS_OUT:-}"'
+AS="$HOME/Library/Application Support"
+CH="$AS/Google/Chrome"; mkdir -p "$CH/Default"
+sqlite3 "$CH/Default/Cookies" "CREATE TABLE cookies(host_key TEXT, name TEXT);
+  INSERT INTO cookies VALUES ('.google.com','a'),('accounts.google.com','b'),('.bank.co.uk','c'),
+  ('tracker.com','d'),('.evilgoogle.com','e'),('x''y.com','f');"
+printf 'profile.info_cache.Default.name=Work\n' > "$CH/Local State"
+mkdir -p "$AS/Microsoft Edge/Default"; sqlite3 "$AS/Microsoft Edge/Default/Cookies" "CREATE TABLE other(x TEXT); INSERT INTO other VALUES ('a');"
+FF="$AS/Firefox/Profiles/abc.default-release"; mkdir -p "$FF"
+sqlite3 "$FF/cookies.sqlite" "CREATE TABLE moz_cookies(host TEXT, name TEXT); INSERT INTO moz_cookies VALUES ('.news.com','a'),('.shop.com','b');"
+ck() { sqlite3 "$CH/Default/Cookies" "SELECT count(*) FROM cookies"; }
+pnum() { menu "7\nb\nq\n" | awk -v l="$1" 'index($0, l) { print $1; exit }'; }
+snum() { menu "7\n$(pnum Work)\nb\nb\nq\n" | awk -v l="  $1 " 'index($0, l) { print $1; exit }'; }
+
+out=$(menu "7\nb\nq\n")
+echo "$out" | grep "Chrome" | grep "Work" | grep -q " 6 cookies" || fail "Chrome profile not listed: $out"
+echo "$out" | grep "Firefox" | grep -q "default-release" || fail "Firefox profile not listed: $out"
+echo "$out" | grep -q "Manage Website Data" || fail "no Safari pointer: $out"
+out=$(menu "7\n$(pnum Work)\nb\nb\nq\n")
+echo "$out" | grep "google.com" | grep -v evil | grep -q " 2 " || fail "subdomains not grouped: $out"
+echo "$out" | grep -q "bank.co.uk" || fail "country domain grouped wrongly: $out"
+
+out=$(PS_OUT="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" menu "7\n$(pnum Work)\nb\nb\nq\n")
+echo "$out" | grep -q "Quit Google Chrome first" || fail "changed cookies while browser open: $out"
+menu "7\n$(pnum Edge)\nb\nq\n" | grep -q "doesn't recognise" || fail "unknown format not refused"
+[ "$(sqlite3 "$AS/Microsoft Edge/Default/Cookies" "SELECT count(*) FROM other")" = 1 ] || fail "touched unknown format"
+
+menu "7\n$(pnum Work)\n99\nx\nk 99\nb\nb\nq\n" >/dev/null
+[ "$(ck)" = 6 ] || fail "bad choice removed cookies"
+menu "7\n$(pnum Work)\n$(snum tracker.com)\nn\nb\nb\nq\n" >/dev/null
+[ "$(ck)" = 6 ] || fail "removed cookies after declining"
+out=$(menu "7\n$(pnum Work)\n$(snum tracker.com)\ny\nb\nb\nq\n")
+echo "$out" | grep -q "signed out" || fail "no sign-out warning: $out"
+[ "$(ck)" = 5 ] || fail "selected site not removed: $(ck)"
+
+menu "7\n$(pnum Work)\nk $(snum google.com)\nb\nb\nq\n" >/dev/null
+grep -qx "google.com" "$AS/macsweep/keep-sites" || fail "keep list not saved"
+menu "7\n$(pnum Work)\na\ny\nb\nb\nq\n" >/dev/null
+[ "$(sqlite3 "$CH/Default/Cookies" "SELECT count(*) FROM cookies WHERE host_key LIKE '%google.com' AND host_key NOT LIKE '%evil%'")" = 2 ] || fail "kept site removed"
+[ "$(sqlite3 "$CH/Default/Cookies" "SELECT count(*) FROM cookies WHERE host_key LIKE '%evil%' OR host_key LIKE '%bank%'")" = 0 ] || fail "all-except-kept missed sites"
+[ "$(sqlite3 "$CH/Default/Cookies" "SELECT count(*) FROM cookies WHERE host_key = 'x''y.com'")" = 1 ] || fail "odd host name reached SQL"
+menu "7\n$(pnum Work)\nu $(snum google.com)\nb\nb\nq\n" >/dev/null
+grep -qx "google.com" "$AS/macsweep/keep-sites" && fail "site not removed from keep list"
+
+menu "7\n$(pnum default-release)\n1\ny\nb\nb\nq\n" >/dev/null
+[ "$(sqlite3 "$FF/cookies.sqlite" "SELECT count(*) FROM moz_cookies")" = 1 ] || fail "Firefox cookie not removed"
 
 echo "all tests passed"
