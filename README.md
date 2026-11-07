@@ -57,7 +57,7 @@ Or clone the repo and put `macsweep` anywhere on your `PATH`.
 - **Find large files:** list the 20 largest files in a folder. Report only.
 - **Applications:** uninstall an app and its leftover files, or see what's outdated across Homebrew, the App Store (needs the free `mas` tool) and macOS. Updates are report only, and apps that update themselves, like Chrome or Zoom, aren't covered.
 - **Startup items:** see what launches in the background and who signed it. `!` marks programs that are unsigned, damaged or missing. Login items stay in System Settings.
-- **Maintenance:** flush DNS, rebuild Spotlight, remove Time Machine local snapshots, fix duplicate "Open With" entries, and check the startup disk.
+- **Maintenance:** flush DNS, rebuild Spotlight, remove Time Machine local snapshots, fix duplicate "Open With" entries, check the startup disk, and clean up Homebrew, unavailable Xcode simulators and Docker.
 - **Security check:** see whether Gatekeeper, System Integrity Protection, FileVault and the firewall are on, and flag configuration profiles, unsigned apps and suspect startup items. You can turn off a flagged startup item and move it to the Trash. This is not a malware scan: it checks settings and signatures only.
 - **Browser cleanup:** remove cookies site by site in Chrome, Edge, Brave, Arc, Vivaldi and Firefox, and keep a list of sites to always keep, such as your bank and email. The browser must be closed. Removed cookies sign you out of those sites and can't be restored. Passwords, history and bookmarks are never touched. Safari isn't supported: use Safari > Settings > Privacy > Manage Website Data.
 
@@ -82,8 +82,9 @@ Everything in the menu that can run unattended also has a direct command.
 | `caches` | `~/Library/Caches` |
 | `logs` | `~/Library/Logs` |
 | `trash` | `~/.Trash` |
-| `xcode` | `~/Library/Developer/Xcode/DerivedData`, `~/Library/Developer/CoreSimulator/Caches` |
+| `xcode` | `~/Library/Developer/Xcode/DerivedData`, `~/Library/Developer/CoreSimulator/Caches`, and the `DeviceSupport` folders in `~/Library/Developer/Xcode`. Xcode rebuilds these when needed |
 | `devcaches` | `~/.npm/_cacache`, `~/.gradle/caches`, `~/.cache` |
+| `backups` | `~/Library/Application Support/MobileSync/Backup`: iPhone and iPad backups. Only cleaned when you pick it, never by "clean all". They may be the only copy of a device and are deleted, not moved to the Trash |
 
 ## Safety
 
@@ -91,7 +92,7 @@ Everything in the menu that can run unattended also has a direct command.
 - Refuses any target that is a symlink or resolves outside your home folder. Symlinks inside a target are removed, but the files they point to are not.
 - Asks before deleting. Without a terminal it refuses unless you pass `--yes`.
 - Apps rebuild their caches, so the first launch afterwards may be slower.
-- Uninstalling moves files to the Trash, so Finder's Put Back can restore them. It refuses running apps and Apple's own apps, like Pages, except Xcode. Xcode from the App Store belongs to the system, so Finder may ask for an admin password. Its simulators and archived builds in `~/Library/Developer` stay in place, and the uninstaller shows their size. Leftovers are matched on the app's exact ID and name only.
+- Uninstalling moves files to the Trash, so Finder's Put Back can restore them. It refuses running apps and Apple's own apps, like Pages, except Xcode and old macOS installers. Xcode from the App Store belongs to the system, so Finder may ask for an admin password. Its simulators and archived builds in `~/Library/Developer` stay in place, and the uninstaller shows their size. Leftovers are matched on the app's exact ID and name only.
 - Files outside your home folder are never removed by the uninstaller. It prints the `sudo` command so you can decide.
 - System-wide startup daemons are never changed for you. You get the `sudo` command instead.
 - Turning a startup item off can be reversed from the same menu. Removing Time Machine snapshots can't be undone, so the menu says so first.
