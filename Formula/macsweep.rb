@@ -1,8 +1,8 @@
 class Macsweep < Formula
   desc "Clean up and look after your Mac from a simple terminal menu"
   homepage "https://github.com/shannong57/macsweep"
-  url "https://github.com/shannong57/macsweep/archive/refs/tags/v0.3.0.tar.gz"
-  sha256 "d40e509fd8e32995c84931b64dd64eb9cdf35b8b8c614ea1ebc5e5e1fa824270"
+  url "https://github.com/shannong57/macsweep/archive/refs/tags/v0.7.0.tar.gz"
+  sha256 "ba63cfb79b8319d8b2cdc31568ad7b008fbca3742ff1b423dd00a1d9a4c9a6db"
   license "MIT"
 
   depends_on :macos
