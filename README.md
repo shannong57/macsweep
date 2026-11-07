@@ -15,6 +15,7 @@ $ macsweep
   4  Startup items
   5  Maintenance
   6  Security check
+  7  Browser cleanup        (cookies, site by site)
   q  Quit
 
 Choose: 1
@@ -58,6 +59,7 @@ Or clone the repo and put `macsweep` anywhere on your `PATH`.
 - **Startup items:** see what launches in the background and who signed it. `!` marks programs that are unsigned, damaged or missing. Login items stay in System Settings.
 - **Maintenance:** flush DNS, rebuild Spotlight, remove Time Machine local snapshots, fix duplicate "Open With" entries, and check the startup disk.
 - **Security check:** see whether Gatekeeper, System Integrity Protection, FileVault and the firewall are on, and flag configuration profiles, unsigned apps and suspect startup items. You can turn off a flagged startup item and move it to the Trash. This is not a malware scan: it checks settings and signatures only.
+- **Browser cleanup:** remove cookies site by site in Chrome, Edge, Brave, Arc, Vivaldi and Firefox, and keep a list of sites to always keep, such as your bank and email. The browser must be closed. Removed cookies sign you out of those sites and can't be restored. Passwords, history and bookmarks are never touched. Safari isn't supported: use Safari > Settings > Privacy > Manage Website Data.
 
 ## Commands for scripts
 
