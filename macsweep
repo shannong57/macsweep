@@ -6,7 +6,7 @@
 set -uf      # no globbing: every path below is literal
 IFS=$'\n'    # split lists on newlines only, so paths may contain spaces
 
-VERSION="0.5.0"
+VERSION="0.6.0"
 CATEGORIES=$'caches\nlogs\ntrash\nxcode\ndevcaches'
 OPTIN=backups   # cleaned only when named: never part of "clean all"
 MENU=0       # 1 when running inside the menu, which is always interactive
@@ -27,6 +27,7 @@ Usage:
   macsweep updates                    List outdated Homebrew, App Store and macOS items
   macsweep startup [enable|disable LABEL]  List startup items, or turn one on or off
   macsweep security                   Check security settings, app signatures and startup items
+  macsweep performance                Show what's using CPU, memory and disk right now
   macsweep help | version
 
 Categories:
@@ -554,6 +555,65 @@ keep_sites() {  # keep_sites add|remove SITES
 
 browser_running() { case "$(ps -axo command=)" in *"/$1.app/Contents/MacOS/"*) return 0 ;; esac; return 1; }
 
+# "value<tab>app" for the five biggest users of CPU or memory. Helper processes
+# count toward the app they live in, so Chrome is one line, not twenty.
+perf_top() {  # perf_top cpu|mem
+  local field=pcpu order=-r
+  if [ "$1" = mem ]; then field=rss; order=-m; fi
+  ps -Ao "$field=,comm=" "$order" 2>/dev/null | awk '
+    { v = $1; sub(/^ *[^ ]+ /, ""); p = $0
+      if (match(p, /[^\/]+\.app\/Contents\//)) { n = substr(p, RSTART, RLENGTH); sub(/\.app\/Contents\/$/, "", n) }
+      else { n = p; sub(/.*\//, "", n) }
+      if (n != "") t[n] += v }
+    END { for (n in t) printf "%s\t%s\n", t[n], n }' | sort -t $'\t' -k1,1rn | head -n 5
+}
+
+mark() { printf "  %-3s %s\n" "$1" "$2"; }
+
+cmd_performance() {
+  local v n level swap therm free total boot days
+  echo "  Using the most CPU right now (100% = one full core)"
+  perf_top cpu | while IFS=$'\t' read -r v n; do printf "  %6.1f%%  %s\n" "$v" "$n"; done
+  echo
+  echo "  Using the most memory (approximate: memory shared between processes counts more than once)"
+  perf_top mem | while IFS=$'\t' read -r v n; do printf "  %7s  %s\n" "$(echo "$v" | human)" "$n"; done
+  echo
+  echo "  System"
+  level=$(sysctl -n kern.memorystatus_vm_pressure_level 2>/dev/null)
+  case "$level" in
+    1) mark ok "Memory pressure is normal." ;;
+    2) mark ! "Memory pressure is high. Quitting apps you aren't using will help." ;;
+    4) mark ! "Memory pressure is critical. Quit apps or restart." ;;
+    *) mark "?" "Couldn't read memory pressure." ;;
+  esac
+  swap=$(sysctl -n vm.swapusage 2>/dev/null | sed -n 's/.*used = \([0-9]*\)[.0-9]*M.*/\1/p')
+  if [ -z "$swap" ]; then mark "?" "Couldn't read swap use."
+  elif [ "$swap" -gt 1024 ]; then mark ! "Using $(echo $((swap * 1024)) | human) of swap: the Mac is short of memory."
+  else mark ok "Little or no swap in use."
+  fi
+  therm=$(pmset -g therm 2>/dev/null)
+  case "$therm" in
+    "") mark "?" "Couldn't read the temperature status." ;;
+    *"No thermal warning"*) mark ok "Not running hot." ;;
+    *) mark ! "Running hot, so macOS may be slowing it down. Check for blocked vents or a busy app above." ;;
+  esac
+  free=$(df -Pk "$HOME" | awk 'NR == 2 { print $4 + 0 }')
+  total=$(df -Pk "$HOME" | awk 'NR == 2 { print $2 + 1 }')
+  if [ $((free * 10)) -lt "$total" ] || [ "$free" -lt 20971520 ]; then
+    mark ! "Only $(echo "$free" | human) free. macOS slows down when the disk is nearly full: try Clean up junk."
+  else mark ok "$(echo "$free" | human) of disk free."
+  fi
+  boot=$(sysctl -n kern.boottime 2>/dev/null | sed -n 's/^{ sec = \([0-9]*\).*/\1/p')
+  if [ -n "$boot" ]; then
+    days=$(( ($(date +%s) - boot) / 86400 ))
+    if [ "$days" -ge 14 ]; then mark ! "Last restarted $days days ago. A restart clears memory that builds up over time."
+    else mark ok "Restarted $days days ago."
+    fi
+  fi
+  echo
+  echo "  This is a snapshot of right now. Apps that start at login are in Startup items."
+}
+
 flush_dns() { sudo dscacheutil -flushcache && sudo killall -HUP mDNSResponder; }
 
 rebuild_open_with() {
@@ -886,6 +946,7 @@ menu_main() {
     echo "  5  Maintenance"
     echo "  6  Security check"
     echo "  7  Browser cleanup        (cookies, site by site)"
+    echo "  8  Performance check"
     echo "  q  Quit"
     echo
     ask "Choose: "
@@ -897,6 +958,7 @@ menu_main() {
       5) menu_maintenance ;;
       6) menu_security ;;
       7) menu_browser ;;
+      8) echo; cmd_performance; echo; ask "Press Enter to go back: " ;;
       *) echo "  Not a valid choice." ;;
     esac
   done
@@ -917,6 +979,7 @@ case "$cmd" in
   updates) cmd_updates ;;
   startup) cmd_startup "$@" ;;
   security) cmd_security ;;
+  performance) cmd_performance ;;
   version|--version) echo "macsweep $VERSION" ;;
   help|-h|--help)    usage ;;
   *) usage >&2; exit 1 ;;
