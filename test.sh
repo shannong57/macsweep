@@ -52,6 +52,8 @@ mk "$HOME/Library/Caches/a"; mk "$HOME/Library/Logs/b"
 kept() { [ -f "$HOME/Library/Caches/a" ] && [ -f "$HOME/Library/Logs/b" ] || fail "$1"; }
 
 menu "q\n" | grep -q "Clean up junk" || fail "menu not shown"
+menu "q\n" | grep -q "  1. Clean up junk" || fail "menu numbers not 1. 2. 3."
+menu "5.\nb\nq\n" | grep -q "Flush the DNS cache" || fail "choice with a dot not accepted"
 menu "q\n" | grep -q $'\033' && fail "escape codes in captured output"
 menu "1\n   \nb\nq\n" >/dev/null; kept "blank selection cleaned something"
 menu "1\n9\n0\nx\n1 9\nb\nq\n" >/dev/null; kept "bad selection cleaned something"
@@ -184,7 +186,7 @@ echo "$out" | grep "com.fake.unsigned" | grep -q "! not signed" || fail "unsigne
 echo "$out" | grep "com.fake.zgone" | grep -q "! program missing" || fail "missing not flagged: $out"
 echo "$out" | grep -q "Login Items" || fail "login items pointer missing: $out"
 
-num() { "$ms" startup | awk -v l="$1" 'index($0, l) { print $1; exit }'; }
+num() { "$ms" startup | awk -v l="$1" 'index($0, l) { print $1 + 0; exit }'; }
 : > "$calls"
 menu "4\n$(num com.fake.agent)\nn\nb\nq\n" >/dev/null
 grep -q "launchctl disable" "$calls" && fail "changed an item after declining"
@@ -269,7 +271,7 @@ stub profiles 'exit 1'
 stub spctl 'exit 1'
 "$ms" security | grep -q "?   Gatekeeper" || fail "failed Gatekeeper check read as fine"
 
-snum() { "$ms" security | awk -v l="$1" 'index($0, l) { print $1; exit }'; }
+snum() { "$ms" security | awk -v l="$1" 'index($0, l) { print $1 + 0; exit }'; }
 : > "$calls"
 menu "6\n99\n0\nabc\nb\nq\n" >/dev/null
 [ -f "$UA/com.fake.unsigned.plist" ] || fail "bad choice removed an item"
@@ -297,8 +299,8 @@ mkdir -p "$AS/Microsoft Edge/Default"; sqlite3 "$AS/Microsoft Edge/Default/Cooki
 FF="$AS/Firefox/Profiles/abc.default-release"; mkdir -p "$FF"
 sqlite3 "$FF/cookies.sqlite" "CREATE TABLE moz_cookies(host TEXT, name TEXT); INSERT INTO moz_cookies VALUES ('.news.com','a'),('.shop.com','b');"
 ck() { sqlite3 "$CH/Default/Cookies" "SELECT count(*) FROM cookies"; }
-pnum() { menu "7\nb\nq\n" | awk -v l="$1" 'index($0, l) { print $1; exit }'; }
-snum() { menu "7\n$(pnum Work)\nb\nb\nq\n" | awk -v l="  $1 " 'index($0, l) { print $1; exit }'; }
+pnum() { menu "7\nb\nq\n" | awk -v l="$1" 'index($0, l) { print $1 + 0; exit }'; }
+snum() { menu "7\n$(pnum Work)\nb\nb\nq\n" | awk -v l=". $1 " 'index($0, l) { print $1 + 0; exit }'; }
 
 out=$(menu "7\nb\nq\n")
 echo "$out" | grep "Chrome" | grep "Work" | grep -q " 6 cookies" || fail "Chrome profile not listed: $out"
@@ -403,7 +405,7 @@ stub defaults 'case "$1" in
 esac'
 stub killall ''
 stub sysctl '[ "$1" = -n ] && echo "${THROTTLE:-1}"; exit 0'
-tnum() { menu "9\nb\nq\n" | awk -v l="$1" 'index($0, l) { print $1; exit }'; }
+tnum() { menu "9\nb\nq\n" | awk -v l="$1" 'index($0, l) { print $1 + 0; exit }'; }
 echo "com.apple.finder ShowPathbar=true" >> "$store"
 out=$(menu "9\nb\nq\n")
 echo "$out" | grep "path bar" | grep -q " on " || fail "existing setting not shown as on: $out"
