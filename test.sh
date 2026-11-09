@@ -318,6 +318,7 @@ menu "7\n$(pnum Work)\n$(snum tracker.com)\nn\nb\nb\nq\n" >/dev/null
 [ "$(ck)" = 6 ] || fail "removed cookies after declining"
 out=$(menu "7\n$(pnum Work)\n$(snum tracker.com)\ny\nb\nb\nq\n")
 echo "$out" | grep -q "signed out" || fail "no sign-out warning: $out"
+echo "$out" | grep -q "Remove 1 cookie from 1 site:" || fail "wrong plural: $out"
 [ "$(ck)" = 5 ] || fail "selected site not removed: $(ck)"
 
 menu "7\n$(pnum Work)\nk $(snum google.com)\nb\nb\nq\n" >/dev/null

@@ -6,7 +6,7 @@
 set -uf      # no globbing: every path below is literal
 IFS=$'\n'    # split lists on newlines only, so paths may contain spaces
 
-VERSION="0.7.0"
+VERSION="0.7.1"
 CATEGORIES=$'caches\nlogs\ntrash\nxcode\ndevcaches'
 OPTIN=backups   # cleaned only when named: never part of "clean all"
 MENU=0       # 1 when running inside the menu, which is always interactive
@@ -568,6 +568,8 @@ perf_top() {  # perf_top cpu|mem
     END { for (n in t) printf "%s\t%s\n", t[n], n }' | sort -t $'\t' -k1,1rn | head -n 5
 }
 
+plural() { if [ "$1" = 1 ]; then echo "1 $2"; else echo "$1 ${2}s"; fi; }
+
 mark() { printf "  %-3s %s\n" "$1" "$2"; }
 
 cmd_performance() {
@@ -907,14 +909,14 @@ EOF
     [ -n "$picked" ] || { echo "  Nothing to remove: those sites are kept."; continue; }
     n=$(echo "$picked" | wc -l | tr -d ' ')
     total=$(echo "$sites" | awk -F'\t' -v p="$picked" 'BEGIN { split(p, a, "\n"); for (i in a) P[a[i]] } $2 in P { t += $1 } END { print t + 0 }')
-    echo "  Remove $total cookies from $n sites:"
+    echo "  Remove $(plural "$total" cookie) from $(plural "$n" site):"
     echo "$picked" | head -n 10 | sed 's/^/    /'
     [ "$n" -gt 10 ] && echo "    ...and $((n - 10)) more"
     echo "  You'll be signed out of these sites. This can't be undone."
     confirm "Remove them?" || continue
     if browser_running "$app"; then echo "  $app is open now, so nothing was removed."; continue; fi
     if total=$(delete_cookies "$db" "$table" "$col" "$picked") && [ -n "$total" ]; then
-      echo "  Removed $total cookies."
+      echo "  Removed $(plural "$total" cookie)."
     else
       echo "  Couldn't change the cookie file, so nothing was removed."
     fi
@@ -934,7 +936,7 @@ menu_browser() {
       echo "$dbs" | while IFS=$'\t' read -r name label app table col db; do
         i=$((i + 1))
         c=$(sql_read "$db" "SELECT count(*) FROM $table") || c="?"
-        printf "  %3s  %-8s %-30.30s %6s cookies\n" "$i" "$name" "$label" "$c"
+        printf "  %3s  %-8s %-30.30s %14s\n" "$i" "$name" "$label" "$(plural "$c" cookie)"
       done
     fi
     echo
