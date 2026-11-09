@@ -319,7 +319,8 @@ menu "7\n$(pnum Work)\n99\nx\nk 99\nb\nb\nq\n" >/dev/null
 [ "$(ck)" = 6 ] || fail "bad choice removed cookies"
 menu "7\n$(pnum Work)\n$(snum tracker.com)\nn\nb\nb\nq\n" >/dev/null
 [ "$(ck)" = 6 ] || fail "removed cookies after declining"
-out=$(menu "7\n$(pnum Work)\n$(snum tracker.com)\ny\nb\nb\nq\n")
+out=$(menu "7\n$(pnum Work)\n$(snum tracker.com)\ny\nb\nb\nq\n" 2>&1)
+echo "$out" | grep -q "\\$ sqlite3 .*DELETE FROM cookies" || fail "cookie command not shown: $out"
 echo "$out" | grep -q "signed out" || fail "no sign-out warning: $out"
 echo "$out" | grep -q "Remove 1 cookie from 1 site:" || fail "wrong plural: $out"
 [ "$(ck)" = 5 ] || fail "selected site not removed: $(ck)"
@@ -345,7 +346,8 @@ B="$HOME/Library/Application Support/MobileSync/Backup"; mk "$B/abc/Info.plist"
 [ ! -e "$HOME/Library/Developer/Xcode/iOS DeviceSupport/17.0" ] || fail "device support not cleared"
 menu "1\na\ny\nb\nq\n" >/dev/null
 [ -f "$B/abc/Info.plist" ] || fail "menu all deleted iPhone backups"
-"$ms" clean backups --yes | grep -q "only copy" || fail "no backup warning"
+out=$("$ms" clean backups --yes); echo "$out" | grep -q "only copy" || fail "no backup warning"
+echo "$out" | grep -q "\$ find .*MobileSync" || fail "clean didn't show its command"
 [ ! -e "$B/abc" ] || fail "backups not cleared when named"
 
 app "$A" "Install macOS Test" com.apple.InstallAssistant.macOSTest 1000
@@ -414,8 +416,9 @@ echo "$out" | grep -q "Gatekeeper" || fail "security note missing"
 : > "$calls"
 menu "9\n$(tnum "hidden files")\nn\nb\nq\n" >/dev/null
 grep -q "defaults write" "$calls" && fail "changed a setting after declining"
-menu "9\n$(tnum "hidden files")\ny\nb\nq\n" >/dev/null
+out=$(menu "9\n$(tnum "hidden files")\ny\nb\nq\n")
 grep -q "defaults write com.apple.finder AppleShowAllFiles -bool true" "$calls" || fail "tweak not written"
+echo "$out" | grep -q "  \\$ defaults write com.apple.finder AppleShowAllFiles -bool true" || fail "tweak command not shown: $out"
 grep -q "killall Finder" "$calls" || fail "Finder not restarted"
 menu "9\n$(tnum "Dock appears")\ny\nb\nq\n" >/dev/null
 grep -q "defaults write com.apple.dock autohide-delay -float 0" "$calls" || fail "float tweak not written"

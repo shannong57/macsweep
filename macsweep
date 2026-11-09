@@ -6,7 +6,7 @@
 set -uf      # no globbing: every path below is literal
 IFS=$'\n'    # split lists on newlines only, so paths may contain spaces
 
-VERSION="0.8.2"
+VERSION="0.8.3"
 CATEGORIES=$'caches\nlogs\ntrash\nxcode\ndevcaches'
 OPTIN=backups   # cleaned only when named: never part of "clean all"
 MENU=0       # 1 when running inside the menu, which is always interactive
@@ -165,7 +165,7 @@ cmd_clean() {
       safe_target "$d" || continue
       before=$(size_kb "$d")
       # rm -rf removes symlinks themselves, never what they point to.
-      find "$d" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null
+      run find "$d" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null   # hide "Operation not permitted" noise
       after=$(size_kb "$d")
       freed=$((freed + before - after))
       [ "$after" -gt 64 ] && echo "  note: some items in $d are in use or protected; left in place"
@@ -236,9 +236,10 @@ system_leftovers() {
 # /usr/bin/trash arrived in macOS 15 and refuses root-owned apps, such as Xcode
 # from the App Store. Finder covers both and can ask for an admin password.
 to_trash() {
-  if [ -x "$ROOT/usr/bin/trash" ]; then "$ROOT/usr/bin/trash" -s "$1" 2>/dev/null; fi
+  if [ -x "$ROOT/usr/bin/trash" ]; then run "$ROOT/usr/bin/trash" -s "$1"; fi
   if [ -e "$1" ] || [ -L "$1" ]; then
-    osascript - "$1" >/dev/null 2>&1 <<'EOF'
+    echo "  (asking Finder to move it to the Trash)"
+    run osascript - "$1" <<'EOF'
 on run argv
   tell application "Finder" to delete (POSIX file (item 1 of argv) as alias)
 end run
@@ -387,11 +388,11 @@ startup_set() {
     return 0
   fi
   domain="gui/$(id -u)"
-  launchctl "$verb" "$domain/$label" || { echo "  Couldn't change $label."; return 1; }
+  run launchctl "$verb" "$domain/$label" || { echo "  Couldn't change $label."; return 1; }
   if [ "$want" = on ]; then
-    launchctl bootstrap "$domain" "$plist" 2>/dev/null
+    run launchctl bootstrap "$domain" "$plist"
   else
-    launchctl bootout "$domain/$label" 2>/dev/null
+    run launchctl bootout "$domain/$label"
   fi
   echo "  $label is now $want."
 }
@@ -538,7 +539,9 @@ delete_cookies() {  # delete_cookies FILE TABLE COLUMN SITES
     where="$where OR $3 = '$s' OR $3 = '.$s' OR $3 LIKE '%.$s'"
   done
   [ -n "$where" ] || { echo 0; return 0; }
-  sqlite3 "$1" "DELETE FROM $2 WHERE 0$where; SELECT changes();" 2>/dev/null
+  local sql="DELETE FROM $2 WHERE 0$where; SELECT changes();"
+  printf '  $ sqlite3 %q "%s"\n' "$1" "$sql" >&2   # stdout is the count, so show the command on stderr
+  sqlite3 "$1" "$sql"
 }
 
 kept_sites() { cat "$KEEP_FILE" 2>/dev/null || true; }
@@ -647,16 +650,16 @@ tweak_on() {  # tweak_on DOMAIN KEY TYPE VALUE
 # Backups run slowly by design so they don't get in the way. Resets at restart.
 tm_fast() { [ "$(sysctl -n debug.lowpri_throttle_enabled 2>/dev/null)" = 0 ]; }
 
-flush_dns() { sudo dscacheutil -flushcache && sudo killall -HUP mDNSResponder; }
+flush_dns() { run sudo dscacheutil -flushcache && run sudo killall -HUP mDNSResponder; }
 
 rebuild_open_with() {
-  "$ROOT/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister" \
+  run "$ROOT/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister" \
     -r -f -apps local,system,user
 }
 
 remove_snapshots() {
   local dates="$1" d ok=0
-  for d in $dates; do sudo tmutil deletelocalsnapshots "$d" || ok=1; done
+  for d in $dates; do run sudo tmutil deletelocalsnapshots "$d" || ok=1; done
   return "$ok"
 }
 
@@ -665,6 +668,9 @@ task_result() { if [ "$1" = 0 ]; then echo "  Done."; else echo "  That didn't w
 # Clears the screen when switching menus. Only on a real screen, so scripts and tests
 # never see escape codes.
 cls() { if [ -t 1 ]; then printf '\033[H\033[2J'; else echo; fi; }
+
+# Shows each command before running it, so you can see what macsweep is doing.
+run() { printf '  $'; printf ' %q' "$@"; echo; "$@"; }
 
 # Shows a message and waits, so the next clear doesn't wipe it unread.
 say_back() { echo "$1"; ask "Press Enter to go back: "; }
@@ -960,7 +966,7 @@ menu_maintenance() {
       b|B) return ;;
       1) if confirm "Flush the DNS cache?"; then flush_dns; task_result $?; fi ;;
       2) echo "  Search results will be incomplete and the Mac may run warm until indexing finishes."
-         if confirm "Rebuild the Spotlight index?"; then sudo mdutil -E /; task_result $?; fi ;;
+         if confirm "Rebuild the Spotlight index?"; then run sudo mdutil -E /; task_result $?; fi ;;
       3) dates=$(tmutil listlocalsnapshotdates / 2>/dev/null | sed -n '/^[0-9]/p')
          if [ -z "$dates" ]; then echo "  No local snapshots."; continue; fi
          count=$(echo "$dates" | wc -l | tr -d ' ')
@@ -969,18 +975,18 @@ menu_maintenance() {
          if confirm "Remove all of them?"; then remove_snapshots "$dates"; task_result $?; fi ;;
       4) if confirm "Rebuild the Open With list?"; then rebuild_open_with; task_result $?; fi ;;
       5) echo "  The Mac may pause briefly while the disk is checked."
-         if confirm "Check the startup disk?"; then diskutil verifyVolume /; task_result $?; fi ;;
+         if confirm "Check the startup disk?"; then run diskutil verifyVolume /; task_result $?; fi ;;
       6) if ! command -v brew >/dev/null; then echo "  Homebrew isn't installed."; continue; fi
          brew cleanup -n 2>/dev/null | tail -n 1 | sed 's/^==> /  /'
-         if confirm "Clean up Homebrew?"; then brew cleanup; task_result $?; fi ;;
+         if confirm "Clean up Homebrew?"; then run brew cleanup; task_result $?; fi ;;
       7) # xcode-select first: a bare xcrun offers to install the developer tools.
          if ! xcode-select -p >/dev/null 2>&1; then echo "  Xcode isn't installed."; continue; fi
          echo "  Removes simulators for iOS versions this Xcode no longer has."
-         if confirm "Delete unavailable simulators?"; then xcrun simctl delete unavailable; task_result $?; fi ;;
+         if confirm "Delete unavailable simulators?"; then run xcrun simctl delete unavailable; task_result $?; fi ;;
       8) if ! command -v docker >/dev/null; then echo "  Docker isn't installed."; continue; fi
          echo "  Deletes stopped containers, unused networks, dangling images and the build cache."
          echo "  Docker must be running. Volumes are kept."
-         if confirm "Clean up Docker?"; then docker system prune -f; task_result $?; fi ;;
+         if confirm "Clean up Docker?"; then run docker system prune -f; task_result $?; fi ;;
       *) echo "  Not a valid choice." ;;
     esac
   done
@@ -1126,11 +1132,11 @@ menu_tweaks() {
     if [ "$reply" = "$((n + 1))" ]; then
       if tm_fast; then
         confirm "Put Time Machine back to its normal background speed?" || continue
-        sudo sysctl debug.lowpri_throttle_enabled=1 >/dev/null; task_result $?
+        run sudo sysctl debug.lowpri_throttle_enabled=1; task_result $?
       else
         echo "  Backups use more disk and CPU until you restart or turn this off."
         confirm "Speed up Time Machine backups?" || continue
-        sudo sysctl debug.lowpri_throttle_enabled=0 >/dev/null; task_result $?
+        run sudo sysctl debug.lowpri_throttle_enabled=0; task_result $?
       fi
       continue
     fi
@@ -1140,12 +1146,12 @@ EOF
     [ -n "$label" ] || { echo "  Not a valid choice."; continue; }
     if tweak_on "$d" "$k" "$t" "$v"; then
       confirm "Put \"$label\" back to Apple's default?" || continue
-      defaults delete "$d" "$k" 2>/dev/null; task_result $?
+      run defaults delete "$d" "$k"; task_result $?
     else
       confirm "Turn on \"$label\"?" || continue
-      defaults write "$d" "$k" "-$t" "$v"; task_result $?
+      run defaults write "$d" "$k" "-$t" "$v"; task_result $?
     fi
-    if [ "$app" != - ]; then killall "$app" 2>/dev/null; fi
+    if [ "$app" != - ]; then run killall "$app"; fi
   done
 }
 
