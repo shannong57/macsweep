@@ -6,7 +6,7 @@
 set -uf      # no globbing: every path below is literal
 IFS=$'\n'    # split lists on newlines only, so paths may contain spaces
 
-VERSION="0.8.1"
+VERSION="0.8.2"
 CATEGORIES=$'caches\nlogs\ntrash\nxcode\ndevcaches'
 OPTIN=backups   # cleaned only when named: never part of "clean all"
 MENU=0       # 1 when running inside the menu, which is always interactive
@@ -365,7 +365,7 @@ print_startup() {
   printf "  %3s  %-4s %-50s %s\n" "#" "" "Item" "Signed by"
   echo "$1" | while IFS=$'\t' read -r kind state label who plist; do
     i=$((i + 1))
-    printf "  %3s  %-4s %-50.50s %s\n" "$i" "$state" "$label" "$who"
+    printf "  %3s. %-4s %-50.50s %s\n" "$i" "$state" "$label" "$who"
   done
   echo
   echo "  ! means worth a look: the program is unsigned, damaged or gone."
@@ -460,7 +460,7 @@ print_security() {
   else
     echo "$1" | while IFS=$'\t' read -r kind state label who plist; do
       i=$((i + 1))
-      printf "  %3s  %-20s %s\n" "$i" "$who" "$label"
+      printf "  %3s. %-20s %s\n" "$i" "$who" "$label"
     done
   fi
   echo
@@ -673,6 +673,7 @@ say_back() { echo "$1"; ask "Press Enter to go back: "; }
 ask() {
   printf "%s" "$1"
   read -r reply || { echo; exit 0; }
+  reply=${reply%.}   # "3." works like "3"
   case "$reply" in q|Q) exit 0 ;; esac
 }
 
@@ -711,9 +712,9 @@ menu_clean() {
     for cat in $all; do
       i=$((i + 1))
       if category_blocked "$cat"; then
-        printf "  %s  %-15s (no access, needs Full Disk Access)\n" "$i" "$(cat_label "$cat")"
+        printf "  %s. %-15s (no access, needs Full Disk Access)\n" "$i" "$(cat_label "$cat")"
       else
-        printf "  %s  %-15s %8s\n" "$i" "$(cat_label "$cat")" "$(category_kb "$cat" | human)"
+        printf "  %s. %-15s %8s\n" "$i" "$(cat_label "$cat")" "$(category_kb "$cat" | human)"
       fi
     done
     echo "  a  All except iPhone backups     b  Back"
@@ -764,7 +765,7 @@ menu_uninstall() {
     i=0
     echo "$apps" | while IFS=$'\t' read -r kb app; do
       i=$((i + 1))
-      printf "  %3s  %-30.30s %-16.16s %8s\n" "$i" "$(basename "$app" .app)" \
+      printf "  %3s. %-30.30s %-16.16s %8s\n" "$i" "$(basename "$app" .app)" \
         "$(plist_get "$app/Contents/Info.plist" CFBundleShortVersionString)" "$(echo "$kb" | human)"
     done
     echo
@@ -813,7 +814,7 @@ dupe_groups() {  # dupe_groups DIR MIN_MB
 print_dupes() {  # print_dupes ROWS
   echo "$1" | awk -F'\t' '{ n[$1]++; s[$1] = $2 } END { for (g in n) printf "%s\t%s\t%s\n", g, n[g], s[g] }' | sort -n \
     | while IFS=$'\t' read -r g n size; do
-        printf "  %3s  %s copies of %s, %s could be freed\n" "$g" "$n" "$(echo $((size / 1024)) | human)" "$(echo $(((n - 1) * size / 1024)) | human)"
+        printf "  %3s. %s copies of %s, %s could be freed\n" "$g" "$n" "$(echo $((size / 1024)) | human)" "$(echo $(((n - 1) * size / 1024)) | human)"
         echo "$1" | awk -F'\t' -v g="$g" '$1 == g { print "         " $3 }'
       done
 }
@@ -855,7 +856,7 @@ menu_dupes() {
     esac
     copies=$(echo "$rows" | awk -F'\t' -v g="$reply" '$1 == g { print $3 }')
     [ -n "$copies" ] || { echo "  Not a valid choice."; continue; }
-    echo "$copies" | awk '{ printf "  %3d  %s\n", NR, $0 }'
+    echo "$copies" | awk '{ printf "  %3d. %s\n", NR, $0 }'
     ask "Keep which copy? The others go to the Trash. (number, b to go back): "
     case "$reply" in b|B|"") continue ;; *[!0-9]*) echo "  Not a valid choice."; continue ;; esac
     keep=$(echo "$copies" | sed -n "${reply}p" 2>/dev/null)
@@ -876,8 +877,8 @@ menu_files() {
   while :; do
     echo
     echo "  Large and duplicate files"
-    echo "  1  Largest files"
-    echo "  2  Duplicate files"
+    echo "  1. Largest files"
+    echo "  2. Duplicate files"
     echo "  b  Back"
     echo
     ask "Choose: "
@@ -895,8 +896,8 @@ menu_apps() {
   while :; do
     echo
     echo "  Applications"
-    echo "  1  Uninstall an app"
-    echo "  2  Check for updates"
+    echo "  1. Uninstall an app"
+    echo "  2. Check for updates"
     echo "  b  Back"
     echo
     ask "Choose: "
@@ -944,14 +945,14 @@ menu_maintenance() {
   while :; do
     echo
     echo "  Maintenance"
-    echo "  1  Flush the DNS cache                  (admin password)"
-    echo "  2  Rebuild the Spotlight search index   (admin password)"
-    echo "  3  Remove Time Machine local snapshots  (admin password)"
-    echo "  4  Fix duplicate \"Open With\" entries"
-    echo "  5  Check the startup disk for errors"
-    echo "  6  Clean up Homebrew                    (old versions and downloads)"
-    echo "  7  Delete unavailable Xcode simulators"
-    echo "  8  Clean up Docker                      (stopped containers, unused images)"
+    echo "  1. Flush the DNS cache                  (admin password)"
+    echo "  2. Rebuild the Spotlight search index   (admin password)"
+    echo "  3. Remove Time Machine local snapshots  (admin password)"
+    echo "  4. Fix duplicate \"Open With\" entries"
+    echo "  5. Check the startup disk for errors"
+    echo "  6. Clean up Homebrew                    (old versions and downloads)"
+    echo "  7. Delete unavailable Xcode simulators"
+    echo "  8. Clean up Docker                      (stopped containers, unused images)"
     echo "  b  Back"
     echo
     ask "Run which? (number, b to go back): "
@@ -1031,7 +1032,7 @@ EOF
     echo "$sites" | while IFS=$'\t' read -r c s; do
       i=$((i + 1)); mark=""
       if kept_sites | grep -qxF -- "$s"; then mark="kept"; fi
-      printf "  %4s  %-40.40s %5s  %s\n" "$i" "$s" "$c" "$mark"
+      printf "  %4s. %-40.40s %5s  %s\n" "$i" "$s" "$c" "$mark"
     done
     echo
     echo "  numbers  remove those sites      a  remove all except kept"
@@ -1078,7 +1079,7 @@ menu_browser() {
       echo "$dbs" | while IFS=$'\t' read -r name label app table col db; do
         i=$((i + 1))
         c=$(sql_read "$db" "SELECT count(*) FROM $table") || c="?"
-        printf "  %3s  %-8s %-30.30s %14s\n" "$i" "$name" "$label" "$(plural "$c" cookie)"
+        printf "  %3s. %-8s %-30.30s %14s\n" "$i" "$name" "$label" "$(plural "$c" cookie)"
       done
     fi
     echo
@@ -1106,11 +1107,11 @@ menu_tweaks() {
     echo "$TWEAKS" | while IFS=$'\t' read -r label d k t v app; do
       i=$((i + 1)); state=off
       if tweak_on "$d" "$k" "$t" "$v"; then state=on; fi
-      printf "  %s  %-4s %s\n" "$i" "$state" "$label"
+      printf "  %s. %-4s %s\n" "$i" "$state" "$label"
     done
     n=$(echo "$TWEAKS" | wc -l | tr -d ' ')
     state=off; if tm_fast; then state=on; fi
-    printf "  %s  %-4s %s\n" "$((n + 1))" "$state" "Faster Time Machine backups until restart (admin password)"
+    printf "  %s. %-4s %s\n" "$((n + 1))" "$state" "Faster Time Machine backups until restart (admin password)"
     echo "  b  Back"
     echo
     echo "  Some changes show up after you log out and back in."
@@ -1154,15 +1155,15 @@ menu_main() {
     disk=$(df -Pk "$HOME" | awk 'NR == 2 { print $4; print $2 }' | human | paste -sd " " - | sed "s/ / free of /")
     cls
     printf "  macsweep — Mac cleanup            Disk: %s\n\n" "$disk"
-    echo "  1  Clean up junk          (caches, logs, Trash, Xcode, dev caches)"
-    echo "  2  Large and duplicate files"
-    echo "  3  Applications           (uninstall, updates)"
-    echo "  4  Startup items"
-    echo "  5  Maintenance"
-    echo "  6  Security check"
-    echo "  7  Browser cleanup        (cookies, site by site)"
-    echo "  8  Performance check"
-    echo "  9  Tweaks                 (hidden settings)"
+    echo "  1. Clean up junk          (caches, logs, Trash, Xcode, dev caches)"
+    echo "  2. Large and duplicate files"
+    echo "  3. Applications           (uninstall, updates)"
+    echo "  4. Startup items"
+    echo "  5. Maintenance"
+    echo "  6. Security check"
+    echo "  7. Browser cleanup        (cookies, site by site)"
+    echo "  8. Performance check"
+    echo "  9. Tweaks                 (hidden settings)"
     echo "  q  Quit"
     echo
     ask "Choose: "

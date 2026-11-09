@@ -9,25 +9,25 @@ $ macsweep
 
   macsweep — Mac cleanup            Disk: 182.0G free of 994.0G
 
-  1  Clean up junk          (caches, logs, Trash, Xcode, dev caches)
-  2  Large and duplicate files
-  3  Applications           (uninstall, updates)
-  4  Startup items
-  5  Maintenance
-  6  Security check
-  7  Browser cleanup        (cookies, site by site)
-  8  Performance check
-  9  Tweaks                 (hidden settings)
+  1. Clean up junk          (caches, logs, Trash, Xcode, dev caches)
+  2. Large and duplicate files
+  3. Applications           (uninstall, updates)
+  4. Startup items
+  5. Maintenance
+  6. Security check
+  7. Browser cleanup        (cookies, site by site)
+  8. Performance check
+  9. Tweaks                 (hidden settings)
   q  Quit
 
 Choose: 1
 
   Clean up junk — scanning...
-  1  Caches           7.3G
-  2  Logs            91.3M
-  3  Trash            1.1G
-  4  Xcode            0.0K
-  5  Dev caches      12.8G
+  1. Caches           7.3G
+  2. Logs            91.3M
+  3. Trash            1.1G
+  4. Xcode            0.0K
+  5. Dev caches      12.8G
   a  All     b  Back
 
 Clean which? (numbers, a for all, b to go back): 1 2
