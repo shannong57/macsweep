@@ -10,7 +10,7 @@ $ macsweep
   macsweep — Mac cleanup            Disk: 182.0G free of 994.0G
 
   1  Clean up junk          (caches, logs, Trash, Xcode, dev caches)
-  2  Find large files
+  2  Large and duplicate files
   3  Applications           (uninstall, updates)
   4  Startup items
   5  Maintenance
@@ -57,13 +57,13 @@ Or clone the repo and put `macsweep` anywhere on your `PATH`.
 ## What's in the menu
 
 - **Clean up junk:** pick which categories to clear.
-- **Find large files:** list the 20 largest files in a folder. Report only.
+- **Large and duplicate files:** list the 20 largest files in a folder, or find files with identical contents and pick which copy to keep. The other copies go to the Trash. Matches are checked byte for byte. `~/Library`, the Trash, cloud-only files, and the insides of apps, photo libraries and other packages are skipped.
 - **Applications:** uninstall an app and its leftover files, or see what's outdated across Homebrew, the App Store (needs the free `mas` tool) and macOS. Updates are report only, and apps that update themselves, like Chrome or Zoom, aren't covered.
 - **Startup items:** see what launches in the background and who signed it. `!` marks programs that are unsigned, damaged or missing. Login items stay in System Settings.
 - **Maintenance:** flush DNS, rebuild Spotlight, remove Time Machine local snapshots, fix duplicate "Open With" entries, check the startup disk, and clean up Homebrew, unavailable Xcode simulators and Docker.
 - **Security check:** see whether Gatekeeper, System Integrity Protection, FileVault and the firewall are on, and flag configuration profiles, unsigned apps and suspect startup items. You can turn off a flagged startup item and move it to the Trash. This is not a malware scan: it checks settings and signatures only.
 - **Browser cleanup:** remove cookies site by site in Chrome, Edge, Brave, Arc, Vivaldi and Firefox, and keep a list of sites to always keep, such as your bank and email. The browser must be closed. Removed cookies sign you out of those sites and can't be restored. Passwords, history and bookmarks are never touched. Safari isn't supported: use Safari > Settings > Privacy > Manage Website Data.
-- **Performance check:** the apps using the most CPU and memory right now, plus memory pressure, swap, overheating, free disk space and time since the last restart. Report only.
+- **Performance check:** the apps using the most CPU and memory right now, plus memory pressure, swap, overheating, free disk space, time since the last restart and battery health. Report only.
 - **Tweaks:** turn hidden macOS settings on or off: no `.DS_Store` files on network drives, an instant Dock, fewer animations, hidden files and the path bar in Finder, and faster Time Machine backups until the next restart. Each shows whether it's on, and turning it off puts back Apple's default. Turning off Gatekeeper or System Integrity Protection is left out on purpose.
 
 ## Commands for scripts
@@ -76,6 +76,7 @@ Everything in the menu that can run unattended also has a direct command.
 | `macsweep scan` | Show reclaimable space per category |
 | `macsweep clean [CATEGORY...]` | Delete junk, asking first. `--dry-run` previews, `--yes` skips the prompt |
 | `macsweep big [PATH] [--min MB]` | List the 20 largest files (report only, never deletes) |
+| `macsweep dupes [PATH] [--min MB]` | List files with identical contents (report only, never deletes) |
 | `macsweep uninstall APP [--yes]` | Move an app and its leftovers to the Trash |
 | `macsweep security` | Report on security settings, app signatures and startup items |
 | `macsweep performance` | Report what's using CPU, memory and disk right now |
