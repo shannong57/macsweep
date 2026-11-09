@@ -6,7 +6,7 @@
 set -uf      # no globbing: every path below is literal
 IFS=$'\n'    # split lists on newlines only, so paths may contain spaces
 
-VERSION="0.8.0"
+VERSION="0.8.1"
 CATEGORIES=$'caches\nlogs\ntrash\nxcode\ndevcaches'
 OPTIN=backups   # cleaned only when named: never part of "clean all"
 MENU=0       # 1 when running inside the menu, which is always interactive
@@ -662,6 +662,13 @@ remove_snapshots() {
 
 task_result() { if [ "$1" = 0 ]; then echo "  Done."; else echo "  That didn't work."; fi; }
 
+# Clears the screen when switching menus. Only on a real screen, so scripts and tests
+# never see escape codes.
+cls() { if [ -t 1 ]; then printf '\033[H\033[2J'; else echo; fi; }
+
+# Shows a message and waits, so the next clear doesn't wipe it unread.
+say_back() { echo "$1"; ask "Press Enter to go back: "; }
+
 # Prompt into $reply. q quits from any menu, and so does end of input.
 ask() {
   printf "%s" "$1"
@@ -697,6 +704,7 @@ pick() {  # pick LIST INPUT
 
 menu_clean() {
   local cat i picked all="$CATEGORIES"$'\n'"$OPTIN"
+  cls
   while :; do
     echo; echo "  Clean up junk — scanning..."
     i=0
@@ -728,15 +736,16 @@ ask_folder_min() {  # ask_folder_min DEFAULT_MB
   case "$reply" in b|B) return 1 ;; esac
   path="${reply:-$HOME}"
   path="${path/#\~/$HOME}"
-  [ -d "$path" ] || { echo "  Not a folder: $path"; return 1; }
+  [ -d "$path" ] || { say_back "  Not a folder: $path"; return 1; }
   ask "Smallest size in MB (Enter for $1, b to go back): "
   case "$reply" in b|B) return 1 ;; esac
   min="${reply:-$1}"
-  case "$min" in *[!0-9]*) echo "  Size must be a whole number of MB."; return 1 ;; esac
+  case "$min" in *[!0-9]*) say_back "  Size must be a whole number of MB."; return 1 ;; esac
 }
 
 menu_big() {
   local path min out
+  cls
   ask_folder_min 500 || return
   echo "  Searching..."
   out=$(cmd_big "$path" --min "$min")
@@ -747,9 +756,10 @@ menu_big() {
 
 menu_uninstall() {
   local apps="" scan=1 i kb app
+  cls
   while :; do
     if [ "$scan" = 1 ]; then echo; echo "  Measuring apps..."; apps=$(list_apps); fi
-    [ -n "$apps" ] || { echo "  No apps found."; return; }
+    [ -n "$apps" ] || { say_back "  No apps found."; return; }
     printf "  %3s  %-30.30s %-16.16s %8s\n" "#" "App" "Version" "Size"
     i=0
     echo "$apps" | while IFS=$'\t' read -r kb app; do
@@ -826,6 +836,7 @@ cmd_dupes() {
 
 menu_dupes() {
   local path min rows row g size f keep copies n p moved
+  cls
   ask_folder_min 10 || return
   echo "  Comparing files. This reads every candidate in full, so it can take a while..."
   rows=$(dupe_groups "$path" "$min")
@@ -861,6 +872,7 @@ menu_dupes() {
 }
 
 menu_files() {
+  cls
   while :; do
     echo
     echo "  Large and duplicate files"
@@ -870,8 +882,8 @@ menu_files() {
     echo
     ask "Choose: "
     case "$reply" in
-      1) menu_big ;;
-      2) menu_dupes ;;
+      1) menu_big; cls ;;
+      2) menu_dupes; cls ;;
       b|B) return ;;
       *) echo "  Not a valid choice." ;;
     esac
@@ -879,6 +891,7 @@ menu_files() {
 }
 
 menu_apps() {
+  cls
   while :; do
     echo
     echo "  Applications"
@@ -888,8 +901,8 @@ menu_apps() {
     echo
     ask "Choose: "
     case "$reply" in
-      1) menu_uninstall ;;
-      2) echo "  Checking, this can take a minute..."; cmd_updates; echo; ask "Press Enter to go back: " ;;
+      1) menu_uninstall; cls ;;
+      2) cls; echo "  Checking, this can take a minute..."; cmd_updates; echo; ask "Press Enter to go back: "; cls ;;
       b|B) return ;;
       *) echo "  Not a valid choice." ;;
     esac
@@ -898,9 +911,10 @@ menu_apps() {
 
 menu_startup() {
   local rows="" scan=1 row kind state label who plist want
+  cls
   while :; do
     if [ "$scan" = 1 ]; then echo; echo "  Checking startup items..."; rows=$(list_startup); fi
-    [ -n "$rows" ] || { echo "  No startup items found."; return; }
+    [ -n "$rows" ] || { say_back "  No startup items found."; return; }
     print_startup "$rows"
     echo
     ask "Turn which on or off? (number, b to go back): "
@@ -926,6 +940,7 @@ EOF
 
 menu_maintenance() {
   local dates count
+  cls
   while :; do
     echo
     echo "  Maintenance"
@@ -972,6 +987,7 @@ menu_maintenance() {
 
 menu_security() {
   local rows="" scan=1 row kind state label who plist
+  cls
   while :; do
     if [ "$scan" = 1 ]; then echo; echo "  Checking..."; rows=$(flagged_startup); fi
     print_security "$rows"
@@ -996,17 +1012,18 @@ EOF
 
 menu_cookies() {  # menu_cookies ROW-FROM-cookie_dbs
   local name label app table col db sites list picked n total i=0 c s mark
+  cls
   IFS=$'\t' read -r name label app table col db <<EOF
 $1
 EOF
-  if browser_running "$app"; then echo "  Quit $app first. macsweep won't change cookies while it's open."; return; fi
+  if browser_running "$app"; then say_back "  Quit $app first. macsweep won't change cookies while it's open."; return; fi
   if ! sql_read "$db" "SELECT $col FROM $table LIMIT 1" >/dev/null; then
-    echo "  This version of $name stores cookies in a way macsweep doesn't recognise, so nothing was changed."
+    say_back "  This version of $name stores cookies in a way macsweep doesn't recognise, so nothing was changed."
     return
   fi
   while :; do
     sites=$(cookie_sites "$db" "$table" "$col")
-    [ -n "$sites" ] || { echo "  No cookies in $name ($label)."; return; }
+    [ -n "$sites" ] || { say_back "  No cookies in $name ($label)."; return; }
     list=$(echo "$sites" | cut -f2)
     echo
     echo "  $name ($label): cookies by site"
@@ -1049,6 +1066,7 @@ EOF
 
 menu_browser() {
   local dbs row i name label app table col db c
+  cls
   while :; do
     dbs=$(cookie_dbs)
     echo
@@ -1074,12 +1092,13 @@ menu_browser() {
     esac
     row=$(echo "$dbs" | sed -n "${reply}p" 2>/dev/null)
     [ -n "$row" ] || { echo "  Not a valid choice."; continue; }
-    menu_cookies "$row"
+    menu_cookies "$row"; cls
   done
 }
 
 menu_tweaks() {
   local i label d k t v app state n
+  cls
   while :; do
     echo
     echo "  Tweaks: hidden macOS settings. Each can be put back to Apple's default here."
@@ -1133,7 +1152,7 @@ menu_main() {
   local disk
   while :; do
     disk=$(df -Pk "$HOME" | awk 'NR == 2 { print $4; print $2 }' | human | paste -sd " " - | sed "s/ / free of /")
-    echo
+    cls
     printf "  macsweep — Mac cleanup            Disk: %s\n\n" "$disk"
     echo "  1  Clean up junk          (caches, logs, Trash, Xcode, dev caches)"
     echo "  2  Large and duplicate files"
@@ -1155,7 +1174,7 @@ menu_main() {
       5) menu_maintenance ;;
       6) menu_security ;;
       7) menu_browser ;;
-      8) echo; cmd_performance; echo; ask "Press Enter to go back: " ;;
+      8) cls; cmd_performance; echo; ask "Press Enter to go back: " ;;
       9) menu_tweaks ;;
       *) echo "  Not a valid choice." ;;
     esac
