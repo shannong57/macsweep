@@ -6,7 +6,7 @@
 set -uf      # no globbing: every path below is literal
 IFS=$'\n'    # split lists on newlines only, so paths may contain spaces
 
-VERSION="0.7.1"
+VERSION="0.8.0"
 CATEGORIES=$'caches\nlogs\ntrash\nxcode\ndevcaches'
 OPTIN=backups   # cleaned only when named: never part of "clean all"
 MENU=0       # 1 when running inside the menu, which is always interactive
@@ -23,6 +23,7 @@ Usage:
       -n, --dry-run                   Show what would be deleted, delete nothing
       -y, --yes                       Don't ask for confirmation
   macsweep big [PATH] [--min MB]      List the 20 largest files (default: ~, 500 MB)
+  macsweep dupes [PATH] [--min MB]    List files with identical contents (default: ~, 10 MB)
   macsweep uninstall APP [--yes]      Move an app and its leftovers to the Trash
   macsweep updates                    List outdated Homebrew, App Store and macOS items
   macsweep startup [enable|disable LABEL]  List startup items, or turn one on or off
@@ -573,7 +574,7 @@ plural() { if [ "$1" = 1 ]; then echo "1 $2"; else echo "$1 ${2}s"; fi; }
 mark() { printf "  %-3s %s\n" "$1" "$2"; }
 
 cmd_performance() {
-  local v n level swap therm free total boot days
+  local v n level swap therm free total boot days battery cond cap cycles
   echo "  Using the most CPU right now (100% = one full core)"
   perf_top cpu | while IFS=$'\t' read -r v n; do printf "  %6.1f%%  %s\n" "$v" "$n"; done
   echo
@@ -612,6 +613,17 @@ cmd_performance() {
     else mark ok "Restarted $days days ago."
     fi
   fi
+  battery=$(system_profiler SPPowerDataType 2>/dev/null)
+  case "$battery" in *"Battery Information"*)
+    cond=$(echo "$battery" | sed -n 's/^ *Condition: //p' | head -n 1)
+    cap=$(echo "$battery" | sed -n 's/^ *Maximum Capacity: \([0-9]*\)%.*/\1/p' | head -n 1)
+    cycles=$(echo "$battery" | sed -n 's/^ *Cycle Count: //p' | head -n 1)
+    if [ "$cond" = Normal ] && [ "${cap:-100}" -ge 80 ]; then
+      mark ok "Battery is normal: ${cap:-?}% of its original capacity, ${cycles:-?} cycles."
+    else
+      mark ! "Battery: ${cond:-unknown}, ${cap:-?}% of its original capacity, ${cycles:-?} cycles. Apple suggests service below 80%."
+    fi ;;
+  esac
   echo
   echo "  This is a snapshot of right now. Apps that start at login are in Startup items."
 }
@@ -709,18 +721,23 @@ menu_clean() {
   done
 }
 
-menu_big() {
-  local path min out
+# Asks for a folder and a minimum size into $path and $min. Fails on b or bad input.
+ask_folder_min() {  # ask_folder_min DEFAULT_MB
   echo
   ask "Folder to search (Enter for your home folder, b to go back): "
-  case "$reply" in b|B) return ;; esac
+  case "$reply" in b|B) return 1 ;; esac
   path="${reply:-$HOME}"
   path="${path/#\~/$HOME}"
-  [ -d "$path" ] || { echo "  Not a folder: $path"; return; }
-  ask "Smallest size in MB (Enter for 500, b to go back): "
-  case "$reply" in b|B) return ;; esac
-  min="${reply:-500}"
-  case "$min" in *[!0-9]*) echo "  Size must be a whole number of MB."; return ;; esac
+  [ -d "$path" ] || { echo "  Not a folder: $path"; return 1; }
+  ask "Smallest size in MB (Enter for $1, b to go back): "
+  case "$reply" in b|B) return 1 ;; esac
+  min="${reply:-$1}"
+  case "$min" in *[!0-9]*) echo "  Size must be a whole number of MB."; return 1 ;; esac
+}
+
+menu_big() {
+  local path min out
+  ask_folder_min 500 || return
   echo "  Searching..."
   out=$(cmd_big "$path" --min "$min")
   echo "${out:-  Nothing that large.}"
@@ -751,6 +768,113 @@ menu_uninstall() {
     [ -n "$app" ] || { echo "  Not a valid choice."; continue; }
     uninstall_app "$app"
     scan=1
+  done
+}
+
+# "group<tab>bytes<tab>path" for files with identical contents, biggest files first.
+# Matches are confirmed byte for byte. Hard links to one file, cloud-only files, ~/Library,
+# the Trash, and the insides of apps, photo libraries and other packages are skipped.
+# ponytail: within one size and checksum, only exact copies of the first file are kept.
+dupe_groups() {  # dupe_groups DIR MIN_MB
+  local f kb size crc prev="" first="" shown=0 id=0
+  find "$1" -xdev \( -path "$HOME/Library" -o -path "$HOME/.Trash" -o -name .git -o -name node_modules \
+       -o -name "*.app" -o -name "*.photoslibrary" -o -name "*.photolibrary" -o -name "*.musiclibrary" \
+       -o -name "*.tvlibrary" -o -name "*.imovielibrary" -o -name "*.fcpbundle" -o -name "*.logicx" \
+       -o -name "*.band" -o -name "*.bundle" -o -name "*.framework" -o -name "*.sparsebundle" \) -prune \
+       -o -type f -size +$(($2 * 2048)) -print 2>/dev/null \
+    | while IFS= read -r f; do
+        case "$f" in *$'\t'*) continue ;; esac
+        kb=$(du -k "$f" 2>/dev/null | cut -f1)
+        [ "${kb:-0}" -ge $(($2 * 1024)) ] || continue   # cloud-only files use no disk
+        printf "%s\t%s\n" "$(wc -c < "$f" | tr -d ' ')" "$f"
+      done \
+    | awk -F'\t' '{ n[$1]++; r[NR] = $0; s[NR] = $1 } END { for (i = 1; i <= NR; i++) if (n[s[i]] > 1) print r[i] }' \
+    | while IFS=$'\t' read -r size f; do printf "%s\t%s\t%s\n" "$size" "$(cksum < "$f" | cut -d ' ' -f 1)" "$f"; done \
+    | sort -t $'\t' -k1,1nr -k2,2 -k3,3 \
+    | while IFS=$'\t' read -r size crc f; do
+        if [ "$size:$crc" != "$prev" ]; then prev="$size:$crc"; first="$f"; shown=0; continue; fi
+        [ "$f" -ef "$first" ] && continue
+        cmp -s "$first" "$f" || continue
+        if [ "$shown" = 0 ]; then id=$((id + 1)); shown=1; printf "%s\t%s\t%s\n" "$id" "$size" "$first"; fi
+        printf "%s\t%s\t%s\n" "$id" "$size" "$f"
+      done
+}
+
+print_dupes() {  # print_dupes ROWS
+  echo "$1" | awk -F'\t' '{ n[$1]++; s[$1] = $2 } END { for (g in n) printf "%s\t%s\t%s\n", g, n[g], s[g] }' | sort -n \
+    | while IFS=$'\t' read -r g n size; do
+        printf "  %3s  %s copies of %s, %s could be freed\n" "$g" "$n" "$(echo $((size / 1024)) | human)" "$(echo $(((n - 1) * size / 1024)) | human)"
+        echo "$1" | awk -F'\t' -v g="$g" '$1 == g { print "         " $3 }'
+      done
+}
+
+cmd_dupes() {
+  local path="$HOME" min=10 rows
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --min) [ $# -ge 2 ] || die "--min needs a number"; min="$2"; shift ;;
+      -*) die "unknown option: $1" ;;
+      *) path="$1" ;;
+    esac
+    shift
+  done
+  case "$min" in ''|*[!0-9]*) die "--min must be a whole number of MB" ;; esac
+  [ -d "$path" ] || die "not a directory: $path"
+  rows=$(dupe_groups "$path" "$min")
+  if [ -n "$rows" ]; then print_dupes "$rows"; else echo "  No duplicate files of $min MB or more."; fi
+}
+
+menu_dupes() {
+  local path min rows row g size f keep copies n p moved
+  ask_folder_min 10 || return
+  echo "  Comparing files. This reads every candidate in full, so it can take a while..."
+  rows=$(dupe_groups "$path" "$min")
+  while :; do
+    rows=$(echo "$rows" | while IFS=$'\t' read -r g size f; do [ -e "$f" ] && printf "%s\t%s\t%s\n" "$g" "$size" "$f"; done \
+      | awk -F'\t' '{ n[$1]++; r[NR] = $0; g[NR] = $1 } END { for (i = 1; i <= NR; i++) if (n[g[i]] > 1) print r[i] }')
+    [ -n "$rows" ] || { echo "  No duplicate files of $min MB or more."; ask "Press Enter to go back: "; return; }
+    echo
+    print_dupes "$rows"
+    echo
+    echo "  Copies made with Finder's Duplicate can share disk space, so removing them may free less."
+    ask "Clean up which group? (number, b to go back): "
+    case "$reply" in
+      b|B|"") return ;;
+      *[!0-9]*) echo "  Not a valid choice."; continue ;;
+    esac
+    copies=$(echo "$rows" | awk -F'\t' -v g="$reply" '$1 == g { print $3 }')
+    [ -n "$copies" ] || { echo "  Not a valid choice."; continue; }
+    echo "$copies" | awk '{ printf "  %3d  %s\n", NR, $0 }'
+    ask "Keep which copy? The others go to the Trash. (number, b to go back): "
+    case "$reply" in b|B|"") continue ;; *[!0-9]*) echo "  Not a valid choice."; continue ;; esac
+    keep=$(echo "$copies" | sed -n "${reply}p" 2>/dev/null)
+    [ -n "$keep" ] || { echo "  Not a valid choice."; continue; }
+    n=$(($(echo "$copies" | wc -l) - 1))
+    confirm "Keep $keep and move the other $n to the Trash?" || continue
+    moved=0
+    for p in $copies; do
+      [ "$p" = "$keep" ] && continue
+      if to_trash "$p"; then moved=$((moved + 1)); else echo "  Couldn't move $p; left in place."; fi
+    done
+    echo "  Moved $moved to the Trash. (Recover with Finder > Put Back)"
+  done
+}
+
+menu_files() {
+  while :; do
+    echo
+    echo "  Large and duplicate files"
+    echo "  1  Largest files"
+    echo "  2  Duplicate files"
+    echo "  b  Back"
+    echo
+    ask "Choose: "
+    case "$reply" in
+      1) menu_big ;;
+      2) menu_dupes ;;
+      b|B) return ;;
+      *) echo "  Not a valid choice." ;;
+    esac
   done
 }
 
@@ -1012,7 +1136,7 @@ menu_main() {
     echo
     printf "  macsweep — Mac cleanup            Disk: %s\n\n" "$disk"
     echo "  1  Clean up junk          (caches, logs, Trash, Xcode, dev caches)"
-    echo "  2  Find large files"
+    echo "  2  Large and duplicate files"
     echo "  3  Applications           (uninstall, updates)"
     echo "  4  Startup items"
     echo "  5  Maintenance"
@@ -1025,7 +1149,7 @@ menu_main() {
     ask "Choose: "
     case "$reply" in
       1) menu_clean ;;
-      2) menu_big ;;
+      2) menu_files ;;
       3) menu_apps ;;
       4) menu_startup ;;
       5) menu_maintenance ;;
@@ -1049,6 +1173,7 @@ case "$cmd" in
   scan)    cmd_scan ;;
   clean)   cmd_clean "$@" ;;
   big)     cmd_big "$@" ;;
+  dupes)   cmd_dupes "$@" ;;
   uninstall) cmd_uninstall "$@" ;;
   updates) cmd_updates ;;
   startup) cmd_startup "$@" ;;

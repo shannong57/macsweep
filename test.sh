@@ -65,10 +65,10 @@ menu "1\na\ny\nq\n" >/dev/null
 [ ! -e "$HOME/Library/Logs/b" ] || fail "menu all did not clean logs"
 [ -f "$HOME/Documents/keep.txt" ] || fail "menu deleted Documents"
 
-menu "2\n\n1\n\nq\n" | grep -q "big.bin" || fail "menu large files missed big.bin"
-menu "2\n~\n1\n\nq\n" | grep -q "big.bin" || fail "menu large files did not expand ~"
-menu "2\n/no/such/dir\nq\n" | grep -q "Not a folder" || fail "bad folder not rejected"
-menu "2\n\nabc\nq\n" | grep -q "whole number" || fail "bad size not rejected"
+menu "2\n1\n\n1\n\nq\n" | grep -q "big.bin" || fail "menu large files missed big.bin"
+menu "2\n1\n~\n1\n\nq\n" | grep -q "big.bin" || fail "menu large files did not expand ~"
+menu "2\n1\n/no/such/dir\nq\n" | grep -q "Not a folder" || fail "bad folder not rejected"
+menu "2\n1\n\nabc\nq\n" | grep -q "whole number" || fail "bad size not rejected"
 "$ms" </dev/null | grep -q TOTAL || fail "no terminal should still scan"
 
 # Everything below runs against stubs: no real app, Trash or system setting is touched.
@@ -425,5 +425,37 @@ menu "9\n$(tnum "Time Machine")\ny\nb\nq\n" >/dev/null
 grep -q "sudo sysctl debug.lowpri_throttle_enabled=0" "$calls" || fail "Time Machine not sped up"
 THROTTLE=0 menu "9\n$(tnum "Time Machine")\ny\nb\nq\n" >/dev/null
 grep -q "sudo sysctl debug.lowpri_throttle_enabled=1" "$calls" || fail "Time Machine not put back"
+
+# Duplicate files and battery
+D="$HOME/Dupes"; mkdir -p "$D/Pics.photoslibrary" "$L/Caches"
+head -c 1500000 /dev/zero > "$D/a.bin"; cp "$D/a.bin" "$D/b copy.bin"; ln "$D/a.bin" "$D/hardlink.bin"
+{ printf x; head -c 1499999 /dev/zero; } > "$D/same-size-different.bin"
+cp "$D/a.bin" "$D/Pics.photoslibrary/inside.bin"; cp "$D/a.bin" "$L/Caches/lib-copy.bin"
+out=$("$ms" dupes "$D" --min 1)
+echo "$out" | grep -q "2 copies of" || fail "duplicates not grouped: $out"
+echo "$out" | grep -q "b copy.bin" || fail "copy missing: $out"
+echo "$out" | grep -q "hardlink.bin" && fail "hard link counted as a copy: $out"
+echo "$out" | grep -q "different" && fail "different contents matched: $out"
+echo "$out" | grep -q "photoslibrary" && fail "looked inside a library: $out"
+"$ms" dupes --min 1 | grep -q "lib-copy" && fail "looked inside ~/Library"
+"$ms" dupes "$D" --min x 2>/dev/null && fail "accepted bad --min"
+stub cksum 'echo "1 0"'   # every file "collides", so only the byte check can tell them apart
+"$ms" dupes "$D" --min 1 | grep -q "different" && fail "trusted a checksum match without comparing bytes"
+rm "$root/bin/cksum"
+menu "2\n2\n$D\n1\n1\n1\nn\nb\nb\nq\n" >/dev/null
+[ -f "$D/b copy.bin" ] || fail "removed a copy after declining"
+out=$(menu "2\n2\n$D\n1\n1\n2\ny\nb\nb\nq\n")
+[ ! -e "$D/a.bin" ] && [ -f "$D/b copy.bin" ] || fail "kept the wrong copy: $out"
+[ -f "$D/hardlink.bin" ] || fail "removed the hard link"
+echo "$out" | grep -q "Moved 1 to the Trash" || fail "no result: $out"
+echo "$out" | grep -q "No duplicate files" || fail "group not cleared after cleanup: $out"
+
+stub sysctl 'exit 1'; stub pmset 'exit 1'
+stub system_profiler 'printf "Power:\n    Battery Information:\n          Cycle Count: 900\n          Condition: Service Recommended\n          Maximum Capacity: 72%%\n"'
+"$ms" performance | grep -q "!   Battery: Service Recommended, 72%" || fail "worn battery not flagged"
+stub system_profiler 'printf "Power:\n    Battery Information:\n          Cycle Count: 53\n          Condition: Normal\n          Maximum Capacity: 95%%\n"'
+"$ms" performance | grep -q "ok  Battery is normal: 95%" || fail "good battery not shown"
+stub system_profiler 'printf "Power:\n    AC Charger Information:\n"'
+"$ms" performance | grep -q "Battery" && fail "battery shown on a Mac without one"
 
 echo "all tests passed"
