@@ -40,9 +40,10 @@ Every list works the same way: type a number, confirm, and you return to that me
 With Homebrew:
 
 ```sh
-brew tap shannong57/macsweep https://github.com/shannong57/macsweep
-brew install shannong57/macsweep/macsweep
+brew install shannong57/tap/macsweep
 ```
+
+Installed it with the older two-step tap? Switch with `brew uninstall macsweep && brew untap shannong57/macsweep`, then run the line above.
 
 Or without it:
 
@@ -115,3 +116,10 @@ The tests run against a temporary fake home folder with stand-ins for the macOS 
 ## License
 
 MIT. Not affiliated with MacPaw or CleanMyMac.
+
+## Releasing
+
+1. Bump `VERSION` in `macsweep` in a PR and merge it.
+2. Tag the merge commit and push the tag: `git tag -a v1.2.3 -m "macsweep 1.2.3" && git push origin v1.2.3`.
+3. The `release` workflow checks the tag matches `VERSION` and publishes a GitHub Release.
+4. Within a day, [homebrew-tap](https://github.com/shannong57/homebrew-tap) opens a tested PR that points the formula at the new release. Start its `bump` workflow from the Actions tab to skip the wait.

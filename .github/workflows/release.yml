@@ -1,0 +1,20 @@
+name: release
+# Publishes a GitHub Release for a version tag. The Homebrew tap picks it up from there.
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the tag matches the script's version
+        run: |
+          v=$(sed -n 's/^VERSION="\(.*\)"/\1/p' macsweep)
+          [ "v$v" = "$TAG" ] || { echo "Tag $TAG does not match VERSION $v"; exit 1; }
+      - run: gh release create "$TAG" --title "macsweep ${TAG#v}" --generate-notes --verify-tag
