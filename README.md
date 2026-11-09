@@ -99,7 +99,7 @@ Everything in the menu that can run unattended also has a direct command.
 - Refuses any target that is a symlink or resolves outside your home folder. Symlinks inside a target are removed, but the files they point to are not.
 - Asks before deleting. Without a terminal it refuses unless you pass `--yes`.
 - Apps rebuild their caches, so the first launch afterwards may be slower.
-- Uninstalling moves files to the Trash, so Finder's Put Back can restore them. It refuses running apps and Apple's own apps, like Pages, except Xcode and old macOS installers. Xcode from the App Store belongs to the system, so Finder may ask for an admin password. Its simulators and archived builds in `~/Library/Developer` stay in place, and the uninstaller shows their size. Leftovers are matched on the app's exact ID and name only.
+- Uninstalling moves files to the Trash, so Finder's Put Back can restore them. If the app is running, it offers to force quit it first (unsaved work in it is lost; with `--yes` it refuses instead). It refuses Apple's own apps, like Pages, except Xcode and old macOS installers. Xcode from the App Store belongs to the system, so Finder may ask for an admin password. Its simulators and archived builds in `~/Library/Developer` stay in place, and the uninstaller shows their size. Leftovers are matched on the app's exact ID and name only.
 - Files outside your home folder are never removed by the uninstaller. It prints the `sudo` command so you can decide.
 - System-wide startup daemons are never changed for you. You get the `sudo` command instead.
 - Turning a startup item off can be reversed from the same menu. Removing Time Machine snapshots can't be undone, so the menu says so first.
