@@ -121,8 +121,18 @@ echo "$out" | grep -q "Thing" && fail "uninstall list shows Apple app"
 menu "3\n1\n99\n0\nabc\nb\nb\nq\n" >/dev/null
 menu "3\n1\n1\nn\nb\nb\nq\n" >/dev/null
 [ -d "$A/Fake App.app" ] || fail "uninstalled after declining"
-PS_OUT="/x $A/Fake App.app/Contents/MacOS/Fake" "$ms" uninstall "fake app" --yes | grep -q "is running" || fail "running app not refused"
+PS_OUT="1 $A/Fake App.app/Contents/MacOS/Fake" "$ms" uninstall "fake app" --yes | grep -q "is running" || fail "running app not refused"
 [ -d "$A/Fake App.app" ] || fail "removed a running app"
+sleep 60 & pid=$!
+out=$(PS_OUT="$pid $A/Fake App.app/Contents/MacOS/Fake" menu "3\n1\n1\nn\nb\nb\nq\n")
+echo "$out" | grep -q "Force quit it" || fail "no force quit offer: $out"
+kill -0 "$pid" 2>/dev/null || fail "force quit without a yes"
+[ -d "$A/Fake App.app" ] || fail "removed a running app after declining"
+cp -R "$A/Fake App.app" "$root/fake-copy.app"
+out=$(PS_OUT="$pid $A/Fake App.app/Contents/MacOS/Fake" menu "3\n1\n1\ny\nb\nb\nq\n")
+{ wait "$pid"; } 2>/dev/null && fail "force quit did not kill the app"
+[ ! -e "$A/Fake App.app" ] || fail "not uninstalled after force quit: $out"
+mv "$root/fake-copy.app" "$A/Fake App.app"
 
 "$ms" uninstall Evil --yes >/dev/null
 [ ! -e "$HOME/Applications/Evil.app" ] || fail "evil app not removed"
@@ -311,7 +321,8 @@ echo "$out" | grep "google.com" | grep -v evil | grep -q " 2 " || fail "subdomai
 echo "$out" | grep -q "bank.co.uk" || fail "country domain grouped wrongly: $out"
 
 out=$(PS_OUT="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" menu "7\n$(pnum Work)\nb\nb\nq\n")
-echo "$out" | grep -q "Quit Google Chrome first" || fail "changed cookies while browser open: $out"
+echo "$out" | grep -q "Force quit Google Chrome" || fail "no force quit offer for browser: $out"
+echo "$out" | grep -q "cookies by site" && fail "changed cookies while browser open: $out"
 menu "7\n$(pnum Edge)\nb\nq\n" | grep -q "doesn't recognise" || fail "unknown format not refused"
 [ "$(sqlite3 "$AS/Microsoft Edge/Default/Cookies" "SELECT count(*) FROM other")" = 1 ] || fail "touched unknown format"
 

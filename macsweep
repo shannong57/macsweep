@@ -6,7 +6,7 @@
 set -uf      # no globbing: every path below is literal
 IFS=$'\n'    # split lists on newlines only, so paths may contain spaces
 
-VERSION="0.8.3"
+VERSION="0.8.4"
 CATEGORIES=$'caches\nlogs\ntrash\nxcode\ndevcaches'
 OPTIN=backups   # cleaned only when named: never part of "clean all"
 MENU=0       # 1 when running inside the menu, which is always interactive
@@ -248,15 +248,32 @@ EOF
   [ ! -e "$1" ] && [ ! -L "$1" ]
 }
 
+# PIDs of the processes running from inside an app bundle (a path, or "/Name.app").
+# Matched in the shell: a grep or awk here would see its own command line and always hit.
+app_pids() {
+  local pid cmd
+  while IFS=" " read -r pid cmd; do
+    case "$cmd" in *"$1/Contents/"*) echo "$pid" ;; esac
+  done <<EOF
+$(ps -axo pid=,command=)
+EOF
+}
+
+# Same as Force Quit in macOS: the app gets no chance to save.
+force_quit() {
+  local pids
+  pids=$(app_pids "$1")
+  [ -n "$pids" ] || return 0
+  # shellcheck disable=SC2086  # one PID per word
+  run kill -9 $pids || return 1
+  sleep 1
+}
+
 uninstall_app() {
   local app="$1" yes="${2:-0}" plist="$1/Contents/Info.plist" name id ver items sys p kb moved=0
   name=$(basename "$app" .app)
   id=$(plist_get "$plist" CFBundleIdentifier)
   ver=$(plist_get "$plist" CFBundleShortVersionString)
-  # Matched in the shell: a grep here would see its own command line and always hit.
-  case "$(ps -axo command=)" in
-    *"$app/Contents/"*) echo "  $name is running. Quit it, then try again."; return 1 ;;
-  esac
   items=$(leftovers "$id" "$name")
   sys=$(system_leftovers "$id")
 
@@ -270,7 +287,13 @@ uninstall_app() {
     echo "Stays in place: $HOME/Library/Developer ($(size_kb "$HOME/Library/Developer" | human))."
     echo "  It holds simulators and archived builds. For the part Xcode can rebuild: macsweep clean xcode"
   fi
-  if [ "$yes" != 1 ]; then confirm "Proceed?" || return 0; fi
+  if [ -n "$(app_pids "$app")" ]; then
+    if [ "$yes" = 1 ]; then echo "  $name is running. Quit it, then try again, or leave out --yes to force quit it."; return 1; fi
+    confirm "$name is running. Force quit it and continue? Unsaved work in $name will be lost." || return 0
+    force_quit "$app" || { echo "  Couldn't quit $name, so nothing was removed."; return 1; }
+  elif [ "$yes" != 1 ]; then
+    confirm "Proceed?" || return 0
+  fi
 
   kb=$(size_kb "$app")
   if ! to_trash "$app"; then
@@ -1023,7 +1046,11 @@ menu_cookies() {  # menu_cookies ROW-FROM-cookie_dbs
   IFS=$'\t' read -r name label app table col db <<EOF
 $1
 EOF
-  if browser_running "$app"; then say_back "  Quit $app first. macsweep won't change cookies while it's open."; return; fi
+  if browser_running "$app"; then
+    echo "  $app is open, and macsweep won't change cookies while it's open."
+    confirm "Force quit $app? Unsaved work in it will be lost." || return
+    force_quit "/$app.app" || { say_back "  Couldn't quit $app, so nothing was changed."; return; }
+  fi
   if ! sql_read "$db" "SELECT $col FROM $table LIMIT 1" >/dev/null; then
     say_back "  This version of $name stores cookies in a way macsweep doesn't recognise, so nothing was changed."
     return
