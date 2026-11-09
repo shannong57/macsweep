@@ -52,6 +52,7 @@ mk "$HOME/Library/Caches/a"; mk "$HOME/Library/Logs/b"
 kept() { [ -f "$HOME/Library/Caches/a" ] && [ -f "$HOME/Library/Logs/b" ] || fail "$1"; }
 
 menu "q\n" | grep -q "Clean up junk" || fail "menu not shown"
+menu "q\n" | grep -q $'\033' && fail "escape codes in captured output"
 menu "1\n   \nb\nq\n" >/dev/null; kept "blank selection cleaned something"
 menu "1\n9\n0\nx\n1 9\nb\nq\n" >/dev/null; kept "bad selection cleaned something"
 menu "1\n1\nn\nb\nq\n" >/dev/null; kept "declining cleaned something"
