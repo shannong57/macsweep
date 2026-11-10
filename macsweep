@@ -6,8 +6,8 @@
 set -uf      # no globbing: every path below is literal
 IFS=$'\n'    # split lists on newlines only, so paths may contain spaces
 
-VERSION="0.11.0"
-CATEGORIES=$'caches\nlogs\ntrash\nxcode\ndevcaches'
+VERSION="0.12.0"
+CATEGORIES=$'caches\nlogs\ntrash\nxcode\ndevcaches\nappcaches'
 OPTIN=backups   # cleaned only when named: never part of "clean all"
 MENU=0       # 1 when running inside the menu, which is always interactive
 ROOT="${MACSWEEP_ROOT:-}"   # prefix for system folders; lets the tests use a fake one
@@ -38,6 +38,7 @@ Categories:
   trash      ~/.Trash
   xcode      Xcode DerivedData and simulator caches
   devcaches  npm, Gradle and ~/.cache (pip, etc.)
+  appcaches  Cache folders apps keep in ~/Library/Application Support (Chrome, Slack, Notion...)
   backups    iPhone and iPad backups. Only when named; never part of "clean all"
 
 Cleaning only touches your own home folder and never needs sudo.
@@ -62,6 +63,12 @@ targets() {
     devcaches) echo "$HOME/.npm/_cacache"
                echo "$HOME/.gradle/caches"
                echo "$HOME/.cache" ;;
+    # Chromium and Electron apps keep their caches next to their data, not in ~/Library/Caches.
+    # Only folders with these exact names, so logins, history and settings stay.
+    appcaches) find "$HOME/Library/Application Support" -maxdepth 5 -type d \( -name Cache -o -name "Code Cache" \
+                 -o -name GPUCache -o -name ShaderCache -o -name GrShaderCache -o -name DawnCache -o -name DawnGraphiteCache \
+                 -o -name DawnWebGPUCache -o -name GraphiteDawnCache -o -name CachedData -o -name CacheStorage -o -name ScriptCache \) \
+                 -prune ! -path "*/com.apple.*" ! -empty 2>/dev/null | sort ;;
     *) return 1 ;;
   esac
 }
@@ -137,7 +144,7 @@ cmd_clean() {
       -n|--dry-run) dry=1 ;;
       -y|--yes)     yes=1 ;;
       -*) die "unknown option: $1" ;;
-      *) targets "$1" >/dev/null || die "unknown category: $1 (try: caches logs trash xcode devcaches backups)"
+      *) targets "$1" >/dev/null || die "unknown category: $1 (try: caches logs trash xcode devcaches appcaches backups)"
          cats="$cats$1"$'\n' ;;
     esac
     shift
@@ -940,6 +947,7 @@ cat_label() {
     trash)  echo "Trash" ;;
     xcode)  echo "Xcode" ;;
     devcaches) echo "Dev caches" ;;
+    appcaches) echo "App caches" ;;
     backups) echo "iPhone backups" ;;
   esac
 }
@@ -1438,7 +1446,7 @@ menu_main() {
     disk=$(df -Pk "$HOME" | awk 'NR == 2 { print $4; print $2 }' | human | paste -sd " " - | sed "s/ / free of /")
     cls
     printf "  macsweep — Mac cleanup            Disk: %s\n\n" "$disk"
-    echo "  1. Clean up junk          (caches, logs, Trash, Xcode, dev caches)"
+    echo "  1. Clean up junk          (caches, logs, Trash, Xcode, dev and app caches)"
     echo "  2. Large and duplicate files"
     echo "  3. Applications           (uninstall, leftovers, updates)"
     echo "  4. Startup items"
