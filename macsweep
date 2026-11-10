@@ -6,7 +6,7 @@
 set -uf      # no globbing: every path below is literal
 IFS=$'\n'    # split lists on newlines only, so paths may contain spaces
 
-VERSION="0.9.1"
+VERSION="0.10.0"
 CATEGORIES=$'caches\nlogs\ntrash\nxcode\ndevcaches'
 OPTIN=backups   # cleaned only when named: never part of "clean all"
 MENU=0       # 1 when running inside the menu, which is always interactive
@@ -24,7 +24,7 @@ Usage:
       -y, --yes                       Don't ask for confirmation
   macsweep big [PATH] [--min MB]      List the 20 largest files (default: ~, 500 MB)
   macsweep dupes [PATH] [--min MB]    List files with identical contents (default: ~, 10 MB)
-  macsweep uninstall APP [--yes]      Move an app and its leftovers to the Trash
+  macsweep uninstall APP [--yes]      Remove an app and everything it left behind
   macsweep leftovers [--yes]          Move leftovers of already-removed apps to the Trash
   macsweep updates                    List outdated Homebrew, App Store and macOS items
   macsweep startup [enable|disable LABEL]  List startup items, or turn one on or off
@@ -41,7 +41,8 @@ Categories:
   backups    iPhone and iPad backups. Only when named; never part of "clean all"
 
 Cleaning only touches your own home folder and never needs sudo.
-Some Maintenance tasks in the menu ask for your admin password.
+Some Maintenance tasks in the menu ask for your admin password, and so does
+uninstalling an app that has system-wide files.
 EOF
 }
 
@@ -209,29 +210,92 @@ list_apps() {
   done | sort -rn
 }
 
-# An app's files in ~/Library. Exact matches only, so another app's files are
-# never picked up. The ID and name come from the app itself, so anything that
-# could climb out of these folders is ignored.
-leftovers() {
-  local id="$1" name="$2" L="$HOME/Library" p
-  case "$id" in ''|.*|*[!A-Za-z0-9._-]*) id="" ;; esac
-  case "$name" in ''|.*|*/*) ;; *) [ -e "$L/Application Support/$name" ] && echo "$L/Application Support/$name" ;; esac
-  [ -n "$id" ] || return 0
-  for p in "$L/Application Support/$id" "$L/Caches/$id" "$L/Preferences/$id.plist" \
-           "$L/Containers/$id" "$L/Saved Application State/$id.savedState" "$L/Logs/$id" \
-           "$L/HTTPStorages/$id" "$L/WebKit/$id" "$L/LaunchAgents/$id.plist"; do
-    if [ -e "$p" ] || [ -L "$p" ]; then echo "$p"; fi
-  done
+# Folders in ~/Library and /Library whose items are named after an app's ID.
+ID_DIRS=$'Application Support\nCaches\nPreferences\nPreferences/ByHost\nContainers\nGroup Containers
+Application Scripts\nSaved Application State\nLogs\nHTTPStorages\nWebKit\nCookies\nLaunchAgents
+Application Support/com.apple.sharedfilelist/com.apple.LSSharedFileList.ApplicationRecentDocuments'
+SYS_DIRS=$'LaunchAgents\nLaunchDaemons\nPrivilegedHelperTools\nApplication Support\nPreferences\nCaches\nLogs'
+
+# IDs of other installed apps that begin with this app's ID, like Chrome Canary next to
+# Chrome. without_theirs drops anything named after one of those.
+longer_ids() { installed_apps | cut -f1 | ID="$1" awk '{ o = tolower($0); i = tolower(ENVIRON["ID"]) "." } index(o, i) == 1 { print o }'; }
+without_theirs() {
+  OTHERS="${OTHERS:-}" awk 'BEGIN { n = split(ENVIRON["OTHERS"], o, "\n") }
+    { b = tolower($0); sub(/.*\//, "", b); for (i = 1; i <= n; i++) if (o[i] != "" && index(b ".", o[i] ".")) next; print }'
 }
 
-# Files outside your home folder. Listed for the user, never removed.
-system_leftovers() {
-  local id="$1" p
+# Everything an app leaves on the Mac besides itself. Items are matched by the app's ID:
+# the ID alone, or with something before or after it (a helper, a team ID, ".plist").
+# By name, only an exact match, or a maker's folder that spells the name with it
+# (Google/Chrome for "Google Chrome"). The ID and name come from the app itself, so
+# anything that could climb out of these folders is ignored.
+# ponytail: misses data in a folder named differently from the app (Code for Visual Studio Code).
+app_files() {  # app_files ID NAME
+  local id="$1" name="$2" L="$HOME/Library" S="$ROOT/Library" d g dirs
+  case "$name" in ''|.*|*/*) ;; *)
+    for d in "$L/Application Support/$name" "$L/Caches/$name" "$L/Logs/$name" "$S/Application Support/$name"; do
+      if [ -e "$d" ] || [ -L "$d" ]; then echo "$d"; fi
+    done
+    find "$L/Application Support" "$L/Caches" "$L/Logs" -mindepth 2 -maxdepth 2 2>/dev/null |
+      N="$name" awk -F/ '{ n = ENVIRON["N"]; c = $NF; p = $(NF-1) } (c == n && p != n && index(n, p) == 1) || (p " " c == n)'
+    g=$(printf %s "$name" | sed 's/[][*?\\]/\\&/g')   # crash reports
+    find "$L/Logs/DiagnosticReports" -maxdepth 1 \( -name "${g}-20[0-9][0-9]-*" -o -name "${g}_20[0-9][0-9]-*" \) 2>/dev/null
+    find "$L/Application Support/CrashReporter" -maxdepth 1 -name "${g}_*.plist" 2>/dev/null ;;
+  esac
   case "$id" in ''|.*|*[!A-Za-z0-9._-]*) return 0 ;; esac
-  for p in "$ROOT/Library/LaunchAgents/$id.plist" "$ROOT/Library/LaunchDaemons/$id.plist" \
-           "$ROOT/Library/PrivilegedHelperTools/$id" "$ROOT/Library/Application Support/$id"; do
-    if [ -e "$p" ]; then echo "$p"; fi
+  dirs=$(echo "$ID_DIRS" | sed "s|^|$L/|"; echo "$SYS_DIRS" | sed "s|^|$S/|")
+  # The per-user cache and temp folders in /var/folders. Skipped under a test root.
+  [ -n "$ROOT" ] || dirs="$dirs"$'\n'$( { getconf DARWIN_USER_CACHE_DIR; getconf DARWIN_USER_TEMP_DIR; } 2>/dev/null | sed 's|/$||')
+  # shellcheck disable=SC2086  # one folder per line
+  set -- $dirs -mindepth 1 -maxdepth 1 \( -iname "$id" -o -iname "$id.plist" -o -iname "$id.savedState"
+  case "$id" in *.*) set -- "$@" -o -iname "$id.*" -o -iname "*.$id" -o -iname "*.$id.*" ;; esac
+  find "$@" \) 2>/dev/null | without_theirs
+}
+
+# Stops an app's background jobs, so they can't restart it while it is being removed.
+stop_jobs() {  # stop_jobs FILES
+  local p label
+  for p in $1; do
+    case "$p" in */LaunchAgents/*.plist|*/LaunchDaemons/*.plist) ;; *) continue ;; esac
+    label=$(plist_get "$p" Label); label="${label:-$(basename "$p" .plist)}"
+    case "$label" in *[!A-Za-z0-9._-]*) continue ;; esac
+    case "$p" in
+      */LaunchDaemons/*) run sudo launchctl bootout "system/$label" ;;
+      *) run launchctl bootout "gui/$(id -u)/$label" ;;
+    esac
+  done 2>/dev/null   # "not running" is the usual answer
+}
+
+# Takes the app's icon out of the Dock, which would otherwise keep it as a question mark.
+dock_forget() {  # dock_forget ID
+  local tmp key n hit=0
+  tmp=$(mktemp) || return 0
+  if defaults export com.apple.dock "$tmp" 2>/dev/null; then
+    for key in persistent-apps recent-apps; do
+      n=$(plist_get "$tmp" "$key")
+      case "$n" in ''|*[!0-9]*) continue ;; esac
+      while [ "$n" -gt 0 ]; do
+        n=$((n - 1))
+        if [ "$(plist_get "$tmp" "$key.$n.tile-data.bundle-identifier")" = "$1" ]; then
+          plutil -remove "$key.$n" "$tmp" && hit=1
+        fi
+      done
+    done
+    if [ "$hit" = 1 ]; then run defaults import com.apple.dock "$tmp" && run killall Dock; fi
+  fi
+  rm -f "$tmp"
+}
+
+# Clears the installer's records of an app's packages, its saved preferences still held
+# in memory, and its Dock icon.
+forget_app() {  # forget_app ID
+  local pkg
+  case "$1" in ''|.*|*[!A-Za-z0-9._-]*) return 0 ;; esac
+  for pkg in $(pkgutil --pkgs 2>/dev/null | ID="$1" awk '{ l = tolower($0); i = tolower(ENVIRON["ID"]) } l == i || index(l, i ".") == 1' | without_theirs); do
+    run sudo pkgutil --forget "$pkg"
   done
+  killall cfprefsd 2>/dev/null
+  dock_forget "$1"
 }
 
 # /usr/bin/trash arrived in macOS 15 and refuses root-owned apps, such as Xcode
@@ -271,37 +335,53 @@ force_quit() {
 }
 
 uninstall_app() {
-  local app="$1" yes="${2:-0}" plist="$1/Contents/Info.plist" name id ver items sys p kb moved=0
+  local app="$1" yes="${2:-0}" plist="$1/Contents/Info.plist" name id ver all items sys p kb running
   name=$(basename "$app" .app)
   id=$(plist_get "$plist" CFBundleIdentifier)
   ver=$(plist_get "$plist" CFBundleShortVersionString)
-  items=$(leftovers "$id" "$name")
-  sys=$(system_leftovers "$id")
+  echo "Looking for everything $name left behind..."
+  OTHERS=$(longer_ids "$id")
+  all=$(app_files "$id" "$name" | sort -u)
+  sys=$(echo "$all" | P="$ROOT/Library/" awk 'index($0, ENVIRON["P"]) == 1')
+  items=$(echo "$all" | P="$ROOT/Library/" awk 'index($0, ENVIRON["P"]) != 1')
 
   echo "$name $ver — will move to Trash:"
   for p in "$app" $items; do printf "  %8s  %s\n" "$(size_kb "$p" | human)" "$p"; done
   if [ -n "$sys" ]; then
-    echo "System-wide files stay in place. To remove them yourself:"
-    for p in $sys; do printf "  sudo rm -rf %q\n" "$p"; done
+    echo "System-wide files — deleted for good, not moved to the Trash (asks for your admin password):"
+    for p in $sys; do printf "  %8s  %s\n" "$(size_kb "$p" | human)" "$p"; done
   fi
+  echo "Its privacy permissions, installer records and Dock icon are cleared too."
   if [ "$id" = com.apple.dt.Xcode ] && [ -d "$HOME/Library/Developer" ]; then
     echo "Stays in place: $HOME/Library/Developer ($(size_kb "$HOME/Library/Developer" | human))."
     echo "  It holds simulators and archived builds. For the part Xcode can rebuild: macsweep clean xcode"
   fi
-  if [ -n "$(app_pids "$app")" ]; then
+  running=$(app_pids "$app")
+  if [ -n "$running" ]; then
     if [ "$yes" = 1 ]; then echo "  $name is running. Quit it, then try again, or leave out --yes to force quit it."; return 1; fi
     confirm "$name is running. Force quit it and continue? Unsaved work in $name will be lost." || return 0
-    force_quit "$app" || { echo "  Couldn't quit $name, so nothing was removed."; return 1; }
   elif [ "$yes" != 1 ]; then
     confirm "Proceed?" || return 0
   fi
+  stop_jobs "$all"
+  if [ -n "$running" ]; then
+    force_quit "$app" || { echo "  Couldn't quit $name, so nothing was removed."; return 1; }
+  fi
 
   kb=$(size_kb "$app")
+  # Before the app goes: macOS can't look up the permissions of an app it no longer knows.
+  case "$id" in ''|.*|*[!A-Za-z0-9._-]*) ;; *) run tccutil reset All "$id" 2>/dev/null ;; esac   # complains about an app that never asked for any
   if ! to_trash "$app"; then
-    echo "  Couldn't move $app to the Trash, so nothing was removed. It may need admin rights: try dragging it to the Trash in Finder."
+    echo "  Couldn't move $app to the Trash, so its files were left in place. It may need admin rights: try dragging it to the Trash in Finder."
     return 1
   fi
   trash_items "$items" "$kb"
+  if [ -n "$sys" ]; then
+    # shellcheck disable=SC2086  # one path per line
+    run sudo rm -rf -- $sys || echo "  Couldn't delete the system-wide files. They are still in place."
+  fi
+  forget_app "$id"
+  echo "Empty the Trash to finish removing $name."
 }
 
 # Moves each path to the Trash and reports the total. START_KB counts what was already moved.

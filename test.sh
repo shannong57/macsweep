@@ -79,7 +79,7 @@ export MACSWEEP_ROOT="$root/sys"
 calls="$root/calls"; : > "$calls"; export calls
 mkdir -p "$root/bin" "$root/trashed" "$MACSWEEP_ROOT/usr/bin"; export trashed="$root/trashed"
 stub() { printf '#!/usr/bin/env bash\necho "%s $*" >> "$calls"\n%s\n' "$1" "${2:-}" > "$root/bin/$1"; chmod +x "$root/bin/$1"; }
-stub plutil 'f="${@: -1}"; v=$(sed -n "s/^$2=//p" "$f" 2>/dev/null); [ -n "$v" ] && printf "%s\n" "$v"'
+stub plutil '[ "$1" = -remove ] && exit 0; f="${@: -1}"; v=$(sed -n "s/^$2=//p" "$f" 2>/dev/null); [ -n "$v" ] && printf "%s\n" "$v"'
 # Includes the real process list, so a check that matches itself gets caught on a Mac.
 stub ps 'echo "${PS_OUT:-}"; /bin/ps -axo command= 2>/dev/null || true'
 cat > "$MACSWEEP_ROOT/usr/bin/trash" <<'S'
@@ -110,6 +110,22 @@ mk "$L/Saved Application State/com.fake.app.savedState/data"
 mk "$L/Caches/com.fake.app2/keep"
 mk "$L/Caches/com.fake.stuck/keep"
 mk "$MACSWEEP_ROOT/Library/LaunchDaemons/com.fake.app.plist"
+# What a full uninstall also has to find: helpers, team-ID and group names, the maker's folder, crash reports.
+full="Caches/com.fake.app.helper/x
+Preferences/ByHost/com.fake.app.ABC123.plist
+Group Containers/ABCDE12345.com.fake.app/x
+Group Containers/group.com.fake.app/x
+Application Scripts/com.fake.app/x
+Cookies/com.fake.app.binarycookies
+LaunchAgents/com.fake.app.agent.plist
+Caches/Fake App/x
+Application Support/Fake/App/x
+Logs/DiagnosticReports/Fake App-2026-01-02-030405.ips"
+mk "$MACSWEEP_ROOT/Library/PrivilegedHelperTools/com.fake.app.helper"
+mk "$MACSWEEP_ROOT/Library/LaunchDaemons/com.fake.app2.plist"
+stub sudo '"$@"'; stub launchctl; stub tccutil; stub killall
+stub pkgutil '[ "$1" = --pkgs ] && printf "com.fake.app.pkg\ncom.fake.app2.pkg\ncom.fake.app.beta.pkg\n"; exit 0'
+stub defaults '[ "$1" = export ] && printf "persistent-apps=2\npersistent-apps.1.tile-data.bundle-identifier=com.fake.app\n" > "$3"; exit 0'
 
 out=$(menu "3\n1\nb\nb\nq\n")
 echo "$out" | grep -q "Fake App" || fail "uninstall list missing app: $out"
@@ -141,15 +157,37 @@ mv "$root/fake-copy.app" "$A/Fake App.app"
 out=$("$ms" uninstall Stuck --yes || true); echo "$out" | grep -q "Couldn't move" || fail "trash failure hidden: $out"
 [ -d "$L/Caches/com.fake.stuck" ] || fail "removed leftovers when the app could not be moved"
 
+app "$A" "Fake Beta" com.fake.app.beta 1000
+(IFS=$'\n'; for p in $full; do mk "$L/$p"; done)
+mk "$L/Caches/com.fake.app.beta/keep"                # Fake Beta is a separate, installed app
+mk "$L/Application Support/Other/Fake App/keep"     # another app's folder about this one
+mk "$L/Logs/DiagnosticReports/Fake App Helper-2026-01-02-030405.ips"
+# The force-quit uninstall above already took these once.
+mk "$L/Application Support/Fake App/data"; mk "$L/Caches/com.fake.app/data"; mk "$L/Preferences/com.fake.app.plist"
+mk "$MACSWEEP_ROOT/Library/LaunchDaemons/com.fake.app.plist"
+mk "$MACSWEEP_ROOT/Library/PrivilegedHelperTools/com.fake.app.helper"
+: > "$calls"
 out=$(menu "3\n1\n1\ny\nb\nb\nq\n")
 [ ! -e "$A/Fake App.app" ] || fail "menu did not uninstall"
+(IFS=$'\n'; for p in $full; do [ ! -e "$L/$p" ] || fail "leftover kept: $p ($out)"; done)
+for p in "Caches/com.fake.app.beta/keep" "Application Support/Other/Fake App/keep" "Logs/DiagnosticReports/Fake App Helper-2026-01-02-030405.ips"; do
+  [ -f "$L/$p" ] || fail "took a file that isn't the app's: $p"
+done
+rm -rf "$A/Fake Beta.app"
 for p in "Application Support/Fake App" "Application Support/com.fake.app" Caches/com.fake.app \
          Preferences/com.fake.app.plist Containers/com.fake.app "Saved Application State/com.fake.app.savedState"; do
   [ ! -e "$L/$p" ] || fail "leftover kept: $p"
 done
 [ -f "$L/Caches/com.fake.app2/keep" ] || fail "took another app's files"
-[ -f "$MACSWEEP_ROOT/Library/LaunchDaemons/com.fake.app.plist" ] || fail "touched a system file"
-echo "$out" | grep -q "sudo rm -rf" || fail "system leftover not listed"
+[ ! -e "$MACSWEEP_ROOT/Library/LaunchDaemons/com.fake.app.plist" ] || fail "system-wide file kept: $out"
+[ ! -e "$MACSWEEP_ROOT/Library/PrivilegedHelperTools/com.fake.app.helper" ] || fail "system-wide helper kept: $out"
+[ -f "$MACSWEEP_ROOT/Library/LaunchDaemons/com.fake.app2.plist" ] || fail "took another app's system file"
+echo "$out" | grep -q "deleted for good" || fail "no warning that system files skip the Trash: $out"
+for c in "sudo launchctl bootout system/com.fake.app" "launchctl bootout gui/.*/com.fake.app.agent" "tccutil reset All com.fake.app" \
+         "sudo pkgutil --forget com.fake.app.pkg" "plutil -remove persistent-apps.1 " "defaults import com.apple.dock" "killall Dock"; do
+  grep -q -- "$c" "$calls" || fail "full uninstall skipped: $c ($(cat "$calls"))"
+done
+grep -q -- "--forget com.fake.app2.pkg\|--forget com.fake.app.beta.pkg" "$calls" && fail "forgot another app's package"
 echo "$out" | grep -q "Moved" || fail "no result message"
 
 # Xcode is the one Apple app that can go. The trash stub refuses it, like a root-owned app, so Finder takes over.
@@ -245,7 +283,7 @@ agent "$UA" com.fake.off "$good"
 agent "$UA" com.fake.unsigned "$nosig"
 agent "$UA" com.fake.zgone /no/such/program
 agent "$UA" 'com.fake.x;rm' "$good"
-rm "$MACSWEEP_ROOT/Library/LaunchDaemons/com.fake.app.plist"
+rm "$MACSWEEP_ROOT/Library/LaunchDaemons/com.fake.app2.plist"
 agent "$MACSWEEP_ROOT/Library/LaunchDaemons" com.fake.daemon "$good"
 
 out=$(menu "4\nb\nq\n")

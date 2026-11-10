@@ -58,7 +58,7 @@ Or clone the repo and put `macsweep` anywhere on your `PATH`.
 
 - **Clean up junk:** pick which categories to clear.
 - **Large and duplicate files:** list the 20 largest files in a folder, or find files with identical contents and pick which copy to keep. The other copies go to the Trash. Matches are checked byte for byte. `~/Library`, the Trash, cloud-only files, and the insides of apps, photo libraries and other packages are skipped.
-- **Applications:** uninstall an app and its leftover files, clean up after apps that are already gone, or see what's outdated across Homebrew, the App Store (needs the free `mas` tool) and macOS. Updates are report only, and apps that update themselves, like Chrome or Zoom, aren't covered.
+- **Applications:** uninstall an app along with everything it left behind, clean up after apps that are already gone, or see what's outdated across Homebrew, the App Store (needs the free `mas` tool) and macOS. Updates are report only, and apps that update themselves, like Chrome or Zoom, aren't covered.
 - **Startup items:** see what launches in the background and who signed it. `!` marks programs that are unsigned, damaged or missing. Login items stay in System Settings.
 - **Maintenance:** flush DNS, rebuild Spotlight, remove Time Machine local snapshots, fix duplicate "Open With" entries, check the startup disk, and clean up Homebrew, unavailable Xcode simulators and Docker.
 - **Security check:** see whether Gatekeeper, System Integrity Protection, FileVault and the firewall are on, and flag configuration profiles, unsigned apps and suspect startup items. You can turn off a flagged startup item and move it to the Trash. This is not a malware scan: it checks settings and signatures only.
@@ -77,7 +77,7 @@ Everything in the menu that can run unattended also has a direct command.
 | `macsweep clean [CATEGORY...]` | Delete junk, asking first. `--dry-run` previews, `--yes` skips the prompt |
 | `macsweep big [PATH] [--min MB]` | List the 20 largest files (report only, never deletes) |
 | `macsweep dupes [PATH] [--min MB]` | List files with identical contents (report only, never deletes) |
-| `macsweep uninstall APP [--yes]` | Move an app and its leftovers to the Trash |
+| `macsweep uninstall APP [--yes]` | Remove an app and everything it left behind |
 | `macsweep leftovers [--yes]` | Move leftovers of already-removed apps to the Trash |
 | `macsweep security` | Report on security settings, app signatures and startup items |
 | `macsweep performance` | Report what's using CPU, memory and disk right now |
@@ -100,9 +100,10 @@ Everything in the menu that can run unattended also has a direct command.
 - Refuses any target that is a symlink or resolves outside your home folder. Symlinks inside a target are removed, but the files they point to are not.
 - Asks before deleting. Without a terminal it refuses unless you pass `--yes`.
 - Apps rebuild their caches, so the first launch afterwards may be slower.
-- Uninstalling moves files to the Trash, so Finder's Put Back can restore them. If the app is running, it offers to force quit it first (unsaved work in it is lost; with `--yes` it refuses instead). It refuses Apple's own apps, like Pages, except Xcode and old macOS installers. Xcode from the App Store belongs to the system, so Finder may ask for an admin password. Its simulators and archived builds in `~/Library/Developer` stay in place, and the uninstaller shows their size. Leftovers are matched on the app's exact ID and name only.
+- Uninstalling moves the app and its files in your home folder to the Trash, so Finder's Put Back can restore them until you empty it. If the app is running, it offers to force quit it first (unsaved work in it is lost; with `--yes` it refuses instead). It refuses Apple's own apps, like Pages, except Xcode and old macOS installers. Xcode from the App Store belongs to the system, so Finder may ask for an admin password. Its simulators and archived builds in `~/Library/Developer` stay in place, and the uninstaller shows their size. Its files are matched on the app's ID (alone, or with a helper name, team ID or file ending around it) and on its exact name. Files named after another installed app are never taken, even when its ID starts the same way.
 - Leftovers of removed apps are files in `~/Library` named after an app ID whose maker (the `com.example` part) has no app installed, plus folders in Applications that no longer hold a working app. Apple's files, shared-group files and launch agents whose program still exists are never listed. Everything goes to the Trash. A folder named only by the app's name is listed when it matches the name in such an ID (`CleanMyMac_5_HealthMonitor` for `com.macpaw.CleanMyMac5.HealthMonitor`) and no installed app has that name. Leftovers from a maker that still has another app installed aren't found.
-- Files outside your home folder are never removed by the uninstaller. It prints the `sudo` command so you can decide.
+- The uninstaller also removes what the app put outside your home folder: its startup jobs, helper tools and files in `/Library`. These are listed before you confirm, need your admin password, and are deleted for good instead of going to the Trash. It then clears the app's privacy permissions, its installer records and its Dock icon.
+- A few traces can't be removed this way: passwords the app saved in your keychain, its App Store purchase record, and data it kept in a folder named differently from the app.
 - System-wide startup daemons are never changed for you. You get the `sudo` command instead.
 - Turning a startup item off can be reversed from the same menu. Removing Time Machine snapshots can't be undone, so the menu says so first.
 
