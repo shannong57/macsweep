@@ -6,7 +6,7 @@
 set -uf      # no globbing: every path below is literal
 IFS=$'\n'    # split lists on newlines only, so paths may contain spaces
 
-VERSION="0.8.4"
+VERSION="0.9.0"
 CATEGORIES=$'caches\nlogs\ntrash\nxcode\ndevcaches'
 OPTIN=backups   # cleaned only when named: never part of "clean all"
 MENU=0       # 1 when running inside the menu, which is always interactive
@@ -25,6 +25,7 @@ Usage:
   macsweep big [PATH] [--min MB]      List the 20 largest files (default: ~, 500 MB)
   macsweep dupes [PATH] [--min MB]    List files with identical contents (default: ~, 10 MB)
   macsweep uninstall APP [--yes]      Move an app and its leftovers to the Trash
+  macsweep leftovers [--yes]          Move leftovers of already-removed apps to the Trash
   macsweep updates                    List outdated Homebrew, App Store and macOS items
   macsweep startup [enable|disable LABEL]  List startup items, or turn one on or off
   macsweep security                   Check security settings, app signatures and startup items
@@ -300,12 +301,86 @@ uninstall_app() {
     echo "  Couldn't move $app to the Trash, so nothing was removed. It may need admin rights: try dragging it to the Trash in Finder."
     return 1
   fi
-  moved=$kb
-  for p in $items; do
+  trash_items "$items" "$kb"
+}
+
+# Moves each path to the Trash and reports the total. START_KB counts what was already moved.
+trash_items() {  # trash_items PATHS [START_KB]
+  local p kb moved="${2:-0}" failed=0
+  for p in $1; do
     kb=$(size_kb "$p")
-    if to_trash "$p"; then moved=$((moved + kb)); else echo "  Couldn't move $p; left in place."; fi
+    if to_trash "$p"; then moved=$((moved + kb)); else echo "  Couldn't move $p; left in place."; failed=1; fi
   done
   echo "Moved $(echo "$moved" | human) to Trash. (Recover with Finder > Put Back)"
+  if [ "$failed" = 1 ]; then
+    echo "If macOS said \"Operation not permitted\", give your terminal app Full Disk Access"
+    echo "in System Settings > Privacy & Security, quit and reopen it, then try again."
+  fi
+}
+
+# Bundle ID makers ("com.fake") of every installed app, lowercased. Spotlight finds apps
+# anywhere; the folder scan covers a Mac with Spotlight turned off.
+installed_makers() {
+  local a
+  { mdfind 'kMDItemContentType == "com.apple.application-bundle"' 2>/dev/null
+    find "$ROOT/Applications" "$HOME/Applications" -maxdepth 3 -name "*.app" -prune 2>/dev/null
+  } | while read -r a; do plist_get "$a/Contents/Info.plist" CFBundleIdentifier; echo; done |
+    awk -F. 'NF > 1 { print tolower($1 "." $2) }' | sort -u
+}
+
+# ~/Library items named after an app ID whose maker has no app installed. Matching the maker,
+# not the whole ID, keeps the files of an installed app's helpers and extensions. Apple's,
+# shared-group and printer items are never listed, nor a launch agent whose program still exists.
+# ponytail: misses leftovers named by app name (Application Support/Foo) and leftovers from a
+# maker that still has another app installed; add name matching if those pile up.
+orphans() {
+  local L="$HOME/Library" f prog
+  find "$L/Application Support" "$L/Caches" "$L/Containers" "$L/Saved Application State" "$L/Logs" \
+       "$L/HTTPStorages" "$L/WebKit" "$L/Preferences" "$L/LaunchAgents" -mindepth 1 -maxdepth 1 2>/dev/null |
+  M=$(installed_makers) awk '
+    BEGIN { n = split(ENVIRON["M"], a, "\n"); for (i = 1; i <= n; i++) M[a[i]] }
+    { id = $0; sub(/.*\//, "", id); sub(/^[0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z]\./, "", id)  # team ID
+      id = tolower(id); sub(/\.(savedstate|plist|binarycookies)$/, "", id)
+      if (id ~ /^(com\.apple|group|systemgroup|org\.cups)\./ || id !~ /^[a-z0-9-]+\.[a-z0-9-]+\.[a-z0-9._-]+$/) next
+      split(id, p, "."); if (!((p[1] "." p[2]) in M)) print }' | sort |
+  while read -r f; do
+    case "$f" in "$L/LaunchAgents/"*)
+      prog=$(plist_get "$f" ProgramArguments.0 || plist_get "$f" Program)
+      if [ -n "$prog" ] && [ -e "$prog" ]; then continue; fi ;;
+    esac
+    echo "$f"
+  done
+}
+
+# Folders in Applications that no longer hold an app: a maker's folder whose apps are gone, or
+# an app an interrupted uninstall left half removed. iPhone apps keep Info.plist deeper inside;
+# Chrome and Edge recreate their empty "* Apps.localized" folders.
+dead_app_folders() {
+  local d
+  for d in $(find "$ROOT/Applications" "$HOME/Applications" -mindepth 1 -maxdepth 1 -type d ! -name "*.app" ! -name "*.localized" 2>/dev/null); do
+    [ -n "$(find "$d" \( -name "*.app" -o -type l \) -print -quit 2>/dev/null)" ] || echo "$d"
+  done
+  for d in $(find "$ROOT/Applications" "$HOME/Applications" -maxdepth 2 -type d -name "*.app" -prune 2>/dev/null); do
+    [ -n "$(find "$d" -maxdepth 3 -name Info.plist -print -quit 2>/dev/null)" ] || echo "$d"
+  done
+}
+
+all_leftovers() { dead_app_folders; orphans; }
+
+print_items() {
+  local i=0 p
+  for p in $1; do i=$((i + 1)); printf "  %3s. %8s  %s\n" "$i" "$(size_kb "$p" | human)" "$p"; done
+}
+
+cmd_leftovers() {
+  local yes=0 items
+  case "${1:-}" in -y|--yes) yes=1 ;; "") ;; *) die "unknown option: $1" ;; esac
+  items=$(all_leftovers)
+  [ -n "$items" ] || { echo "No leftovers of removed apps found."; return 0; }
+  echo "Leftovers of apps that are no longer installed:"
+  print_items "$items"
+  [ "$yes" = 1 ] || confirm "Move all of these to the Trash?" || return 0
+  trash_items "$items"
 }
 
 cmd_uninstall() {
@@ -568,7 +643,8 @@ delete_cookies() {  # delete_cookies FILE TABLE COLUMN SITES
 }
 
 kept_sites() { cat "$KEEP_FILE" 2>/dev/null || true; }
-without_kept() { awk -v k="$(kept_sites)" 'BEGIN { n = split(k, a, "\n"); for (i = 1; i <= n; i++) K[a[i]] } !($0 in K)'; }
+# The list goes in through the environment: macOS awk rejects a newline in a -v value.
+without_kept() { K=$(kept_sites) awk 'BEGIN { n = split(ENVIRON["K"], a, "\n"); for (i = 1; i <= n; i++) K[a[i]] } !($0 in K)'; }
 
 keep_sites() {  # keep_sites add|remove SITES
   mkdir -p "$(dirname "$KEEP_FILE")" || return 1
@@ -811,6 +887,27 @@ menu_uninstall() {
   done
 }
 
+menu_leftovers() {
+  local items="" scan=1 sel
+  cls
+  while :; do
+    if [ "$scan" = 1 ]; then echo; echo "  Looking for leftovers of removed apps..."; items=$(all_leftovers); fi
+    [ -n "$items" ] || { say_back "  No leftovers of removed apps found."; return; }
+    print_items "$items"
+    echo
+    ask "Move which to the Trash? (numbers, a for all, b to go back): "
+    scan=0
+    case "$reply" in
+      b|B|"") return ;;
+      a|A) sel=$items ;;
+      *) sel=$(pick "$items" "$reply") || { echo "  Not a valid choice."; continue; } ;;
+    esac
+    confirm "Move $(plural "$(echo "$sel" | grep -c .)" item) to the Trash?" || continue
+    trash_items "$sel"
+    scan=1
+  done
+}
+
 # "group<tab>bytes<tab>path" for files with identical contents, biggest files first.
 # Matches are confirmed byte for byte. Hard links to one file, cloud-only files, ~/Library,
 # the Trash, and the insides of apps, photo libraries and other packages are skipped.
@@ -927,12 +1024,14 @@ menu_apps() {
     echo "  Applications"
     echo "  1. Uninstall an app"
     echo "  2. Check for updates"
+    echo "  3. Leftovers of removed apps"
     echo "  b  Back"
     echo
     ask "Choose: "
     case "$reply" in
       1) menu_uninstall; cls ;;
       2) cls; echo "  Checking, this can take a minute..."; cmd_updates; echo; ask "Press Enter to go back: "; cls ;;
+      3) menu_leftovers; cls ;;
       b|B) return ;;
       *) echo "  Not a valid choice." ;;
     esac
@@ -1190,7 +1289,7 @@ menu_main() {
     printf "  macsweep — Mac cleanup            Disk: %s\n\n" "$disk"
     echo "  1. Clean up junk          (caches, logs, Trash, Xcode, dev caches)"
     echo "  2. Large and duplicate files"
-    echo "  3. Applications           (uninstall, updates)"
+    echo "  3. Applications           (uninstall, leftovers, updates)"
     echo "  4. Startup items"
     echo "  5. Maintenance"
     echo "  6. Security check"
@@ -1228,6 +1327,7 @@ case "$cmd" in
   big)     cmd_big "$@" ;;
   dupes)   cmd_dupes "$@" ;;
   uninstall) cmd_uninstall "$@" ;;
+  leftovers) cmd_leftovers "$@" ;;
   updates) cmd_updates ;;
   startup) cmd_startup "$@" ;;
   security) cmd_security ;;
