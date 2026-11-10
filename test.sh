@@ -124,7 +124,7 @@ Logs/DiagnosticReports/Fake App-2026-01-02-030405.ips"
 mk "$MACSWEEP_ROOT/Library/PrivilegedHelperTools/com.fake.app.helper"
 mk "$MACSWEEP_ROOT/Library/LaunchDaemons/com.fake.app2.plist"
 stub sudo '"$@"'; stub launchctl; stub tccutil; stub killall
-stub pkgutil '[ "$1" = --pkgs ] && printf "com.fake.app.pkg\ncom.fake.app2.pkg\ncom.fake.app.beta.pkg\n"; exit 0'
+stub pkgutil '[ "$1" = --pkgs ] && printf "com.fake.app.pkg\ncom.fake.app2.pkg\ncom.fake.app.beta.pkg\ncom.solo.driver\n"; exit 0'
 stub defaults '[ "$1" = export ] && printf "persistent-apps=2\npersistent-apps.1.tile-data.bundle-identifier=com.fake.app\n" > "$3"; exit 0'
 
 out=$(menu "3\n1\nb\nb\nq\n")
@@ -189,6 +189,32 @@ for c in "sudo launchctl bootout system/com.fake.app" "launchctl bootout gui/.*/
 done
 grep -q -- "--forget com.fake.app2.pkg\|--forget com.fake.app.beta.pkg" "$calls" && fail "forgot another app's package"
 echo "$out" | grep -q "Moved" || fail "no result message"
+
+# Solo Tool is its maker's only app, so everything under com.solo goes with it. Fake App above was not:
+# Stuck shares com.fake, which is why com.fake.app2 survived. Similar names are offered, never taken unasked.
+app "$A" "Solo Tool" com.solo.tool 9000
+mk "$L/Caches/com.solo.updater/x"; mk "$L/Preferences/com.solo.other.plist"; mk "$L/Group Containers/ABCDE12345.com.solo.shared/x"
+mk "$MACSWEEP_ROOT/Library/LaunchAgents/com.solo.loginscreen.plist"
+mk "$L/Application Support/SoloSDK/x"; mk "$L/Caches/Solo Tool Cache/x"; mk "$L/Caches/Solomon/keep"
+mk "$L/Caches/com.fake.stuck.solotool/keep"          # has the name in it, but is an installed app's
+: > "$calls"
+out=$(menu "3\n1\n1\ny\n1\nb\nb\nq\n")
+[ ! -e "$A/Solo Tool.app" ] || fail "Solo Tool not uninstalled: $out"
+for p in "$L/Caches/com.solo.updater" "$L/Preferences/com.solo.other.plist" "$L/Group Containers/ABCDE12345.com.solo.shared" \
+         "$MACSWEEP_ROOT/Library/LaunchAgents/com.solo.loginscreen.plist"; do
+  [ ! -e "$p" ] || fail "maker's file kept though no other app of theirs is installed: $p ($out)"
+done
+echo "$out" | grep -q "last app installed from its maker" || fail "maker sweep not announced: $out"
+grep -q -- "--forget com.solo.driver" "$calls" || fail "maker's package record kept"
+echo "$out" | grep -q "may also belong to Solo Tool" || fail "similar names not offered: $out"
+echo "$out" | grep -q "com.fake.stuck.solotool" && fail "offered an installed app's file: $out"
+[ ! -e "$L/Application Support/SoloSDK" ] || fail "picked item not removed: $out"
+[ -d "$L/Caches/Solo Tool Cache" ] || fail "removed a similar-named item that was not picked"
+[ -f "$L/Caches/Solomon/keep" ] && [ -f "$L/Caches/com.fake.stuck.solotool/keep" ] || fail "took an unrelated file"
+app "$A" "Solo Tool" com.solo.tool 9000
+out=$("$ms" uninstall "Solo Tool" --yes)
+echo "$out" | grep -q "left in place" && [ -d "$L/Caches/Solo Tool Cache" ] || fail "--yes removed a similar-named item: $out"
+rm -rf "$L/Caches/Solo Tool Cache" "$L/Caches/Solomon" "$L/Caches/com.fake.stuck.solotool"
 
 # Xcode is the one Apple app that can go. The trash stub refuses it, like a root-owned app, so Finder takes over.
 app "$A" Xcode com.apple.dt.Xcode 5000

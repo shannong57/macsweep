@@ -6,7 +6,7 @@
 set -uf      # no globbing: every path below is literal
 IFS=$'\n'    # split lists on newlines only, so paths may contain spaces
 
-VERSION="0.10.0"
+VERSION="0.11.0"
 CATEGORIES=$'caches\nlogs\ntrash\nxcode\ndevcaches'
 OPTIN=backups   # cleaned only when named: never part of "clean all"
 MENU=0       # 1 when running inside the menu, which is always interactive
@@ -218,7 +218,7 @@ SYS_DIRS=$'LaunchAgents\nLaunchDaemons\nPrivilegedHelperTools\nApplication Suppo
 
 # IDs of other installed apps that begin with this app's ID, like Chrome Canary next to
 # Chrome. without_theirs drops anything named after one of those.
-longer_ids() { installed_apps | cut -f1 | ID="$1" awk '{ o = tolower($0); i = tolower(ENVIRON["ID"]) "." } index(o, i) == 1 { print o }'; }
+longer_ids() { echo "${APPS:-}" | cut -f1 | ID="$1" awk '{ o = tolower($0); i = tolower(ENVIRON["ID"]) "." } index(o, i) == 1 { print o }'; }
 without_theirs() {
   OTHERS="${OTHERS:-}" awk 'BEGIN { n = split(ENVIRON["OTHERS"], o, "\n") }
     { b = tolower($0); sub(/.*\//, "", b); for (i = 1; i <= n; i++) if (o[i] != "" && index(b ".", o[i] ".")) next; print }'
@@ -226,6 +226,8 @@ without_theirs() {
 
 # Everything an app leaves on the Mac besides itself. Items are matched by the app's ID:
 # the ID alone, or with something before or after it (a helper, a team ID, ".plist").
+# When the app is its maker's last one installed (MAKER is set), everything under the
+# maker's part of the ID goes too: com.dropbox.* along with com.dropbox.client.
 # By name, only an exact match, or a maker's folder that spells the name with it
 # (Google/Chrome for "Google Chrome"). The ID and name come from the app itself, so
 # anything that could climb out of these folders is ignored.
@@ -249,6 +251,7 @@ app_files() {  # app_files ID NAME
   # shellcheck disable=SC2086  # one folder per line
   set -- $dirs -mindepth 1 -maxdepth 1 \( -iname "$id" -o -iname "$id.plist" -o -iname "$id.savedState"
   case "$id" in *.*) set -- "$@" -o -iname "$id.*" -o -iname "*.$id" -o -iname "*.$id.*" ;; esac
+  [ -z "${MAKER:-}" ] || set -- "$@" -o -iname "$MAKER.*" -o -iname "*.$MAKER.*"
   find "$@" \) 2>/dev/null | without_theirs
 }
 
@@ -291,7 +294,7 @@ dock_forget() {  # dock_forget ID
 forget_app() {  # forget_app ID
   local pkg
   case "$1" in ''|.*|*[!A-Za-z0-9._-]*) return 0 ;; esac
-  for pkg in $(pkgutil --pkgs 2>/dev/null | ID="$1" awk '{ l = tolower($0); i = tolower(ENVIRON["ID"]) } l == i || index(l, i ".") == 1' | without_theirs); do
+  for pkg in $(pkgutil --pkgs 2>/dev/null | ID="$1" M="${MAKER:-}" awk '{ l = tolower($0); i = tolower(ENVIRON["ID"]); m = ENVIRON["M"] } l == i || index(l, i ".") == 1 || (m != "" && index(l, m ".") == 1)' | without_theirs); do
     run sudo pkgutil --forget "$pkg"
   done
   killall cfprefsd 2>/dev/null
@@ -334,16 +337,51 @@ force_quit() {
   sleep 1
 }
 
+# The maker's part of an app ID (com.dropbox), when no other installed app shares it.
+# Not for Apple, or for prefixes that unrelated apps share.
+free_maker() {  # free_maker ID
+  echo "${APPS:-}" | cut -f1 | ID="$1" awk '
+    BEGIN { n = split(tolower(ENVIRON["ID"]), p, "."); if (n >= 3) m = p[1] "." p[2] }
+    m != "" && index(tolower($0), m ".") == 1 { taken = 1 }
+    END { if (m != "" && !taken && m !~ /^(com\.apple|com\.github|io\.github|com\.gitlab|com\.electron|net\.sourceforge|org\.sourceforge)$/) print m }'
+}
+
+# Items whose name only contains the app's name, its first word or its maker's name. They
+# may belong to the app, so the user picks. Nothing named after an installed app is offered.
+# ponytail: looks one level into the usual Library folders, not at ~/Library itself or deeper.
+related_items() {  # related_items NAME
+  local dirs
+  dirs=$(echo "$ID_DIRS" | sed "s|^|$HOME/Library/|"; echo "$SYS_DIRS" | sed "s|^|$ROOT/Library/|")
+  # shellcheck disable=SC2086  # one folder per line
+  find $dirs -mindepth 1 -maxdepth 1 2>/dev/null | NAME="$1" M="${MAKER:-}" APPS="${APPS:-}" awk '
+    function norm(s) { s = tolower(s); gsub(/[^a-z0-9]/, "", s); return s }
+    BEGIN { n = split(ENVIRON["APPS"], a, "\n"); split(ENVIRON["NAME"], w, " "); first = norm(w[1])
+            for (i = 1; i <= n; i++) { split(a[i], f, "\t"); id[i] = tolower(f[1]); nm[i] = norm(f[2]); if (index(nm[i], first)) first = "" }
+            k[1] = norm(ENVIRON["NAME"]); k[2] = first; split(ENVIRON["M"], p, "."); k[3] = norm(p[2]) }
+    { b = $0; sub(/.*\//, "", b); l = tolower(b); nb = norm(b); hit = 0
+      for (j = 1; j <= 3; j++) if (length(k[j]) >= 4 && index(nb, k[j])) hit = 1
+      if (!hit || index(l, "com.apple.")) next
+      for (i = 1; i <= n; i++) if ((id[i] != "" && index(l, id[i])) || (length(nm[i]) >= 4 && index(nb, nm[i]))) next
+      print }' | sort
+}
+
+# under_sys 1 keeps the paths in /Library, under_sys 0 the rest.
+under_sys() { P="$ROOT/Library/" awk -v want="$1" '(index($0, ENVIRON["P"]) == 1) == want'; }
+
 uninstall_app() {
-  local app="$1" yes="${2:-0}" plist="$1/Contents/Info.plist" name id ver all items sys p kb running
+  local app="$1" yes="${2:-0}" plist="$1/Contents/Info.plist" name id ver all items sys p kb running rel sel
   name=$(basename "$app" .app)
   id=$(plist_get "$plist" CFBundleIdentifier)
   ver=$(plist_get "$plist" CFBundleShortVersionString)
   echo "Looking for everything $name left behind..."
+  case "$id" in .*|*[!A-Za-z0-9._-]*) id="" ;; esac   # the ID comes from the app, so don't trust it
+  # Every other installed app. These decide what is safe to take.
+  APPS=$(installed_apps | ID="$id" N="$name" awk -F'\t' 'tolower($1) != tolower(ENVIRON["ID"]) && $2 != ENVIRON["N"]')
   OTHERS=$(longer_ids "$id")
+  MAKER=$(free_maker "$id")
   all=$(app_files "$id" "$name" | sort -u)
-  sys=$(echo "$all" | P="$ROOT/Library/" awk 'index($0, ENVIRON["P"]) == 1')
-  items=$(echo "$all" | P="$ROOT/Library/" awk 'index($0, ENVIRON["P"]) != 1')
+  sys=$(echo "$all" | under_sys 1)
+  items=$(echo "$all" | under_sys 0)
 
   echo "$name $ver — will move to Trash:"
   for p in "$app" $items; do printf "  %8s  %s\n" "$(size_kb "$p" | human)" "$p"; done
@@ -351,6 +389,7 @@ uninstall_app() {
     echo "System-wide files — deleted for good, not moved to the Trash (asks for your admin password):"
     for p in $sys; do printf "  %8s  %s\n" "$(size_kb "$p" | human)" "$p"; done
   fi
+  [ -z "$MAKER" ] || echo "This is the last app installed from its maker, so everything named $MAKER.* is included."
   echo "Its privacy permissions, installer records and Dock icon are cleared too."
   if [ "$id" = com.apple.dt.Xcode ] && [ -d "$HOME/Library/Developer" ]; then
     echo "Stays in place: $HOME/Library/Developer ($(size_kb "$HOME/Library/Developer" | human))."
@@ -370,7 +409,7 @@ uninstall_app() {
 
   kb=$(size_kb "$app")
   # Before the app goes: macOS can't look up the permissions of an app it no longer knows.
-  case "$id" in ''|.*|*[!A-Za-z0-9._-]*) ;; *) run tccutil reset All "$id" 2>/dev/null ;; esac   # complains about an app that never asked for any
+  [ -z "$id" ] || run tccutil reset All "$id" 2>/dev/null   # complains about an app that never asked for any
   if ! to_trash "$app"; then
     echo "  Couldn't move $app to the Trash, so its files were left in place. It may need admin rights: try dragging it to the Trash in Finder."
     return 1
@@ -381,6 +420,25 @@ uninstall_app() {
     run sudo rm -rf -- $sys || echo "  Couldn't delete the system-wide files. They are still in place."
   fi
   forget_app "$id"
+  rel=$(related_items "$name")
+  if [ -n "$rel" ]; then
+    echo "These have a similar name and may also belong to $name:"
+    print_items "$rel"
+    if [ "$yes" = 1 ]; then
+      echo "They were left in place."
+    else
+      printf "Remove which? (numbers, Enter for none): "
+      read -r reply || reply=""
+      if sel=$(pick "$rel" "$reply"); then
+        items=$(echo "$sel" | under_sys 0); sys=$(echo "$sel" | under_sys 1)
+        [ -z "$items" ] || trash_items "$items"
+        # shellcheck disable=SC2086  # one path per line
+        [ -z "$sys" ] || run sudo rm -rf -- $sys || echo "  Couldn't delete the system-wide files. They are still in place."
+      else
+        echo "Left in place."
+      fi
+    fi
+  fi
   echo "Empty the Trash to finish removing $name."
 }
 
