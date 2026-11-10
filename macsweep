@@ -370,7 +370,7 @@ uninstall_app() {
 
   kb=$(size_kb "$app")
   # Before the app goes: macOS can't look up the permissions of an app it no longer knows.
-  case "$id" in ''|.*|*[!A-Za-z0-9._-]*) ;; *) run tccutil reset All "$id" ;; esac
+  case "$id" in ''|.*|*[!A-Za-z0-9._-]*) ;; *) run tccutil reset All "$id" 2>/dev/null ;; esac   # complains about an app that never asked for any
   if ! to_trash "$app"; then
     echo "  Couldn't move $app to the Trash, so its files were left in place. It may need admin rights: try dragging it to the Trash in Finder."
     return 1
