@@ -163,6 +163,58 @@ grep -q "osascript" "$calls" || fail "Finder not tried after trash refused"
 [ ! -e "$L/Preferences/com.apple.dt.Xcode.plist" ] || fail "Xcode leftover kept"
 [ -f "$L/Developer/Xcode/Archives/keep" ] || fail "removed archived builds"
 echo "$out" | grep -q "Library/Developer" || fail "Developer folder not mentioned: $out"
+
+# Leftovers of apps that are already gone. Stuck (com.fake.stuck) is still installed.
+mk "$L/Caches/com.gone.app/data"
+mk "$L/Preferences/com.gone.app.plist"
+mk "$L/HTTPStorages/com.gone.app.binarycookies"
+mk "$L/Caches/com.fake.helper/keep"
+mk "$L/Containers/ABCDE12345.com.fake.browser-helper/keep"
+mk "$L/Preferences/com.apple.finder.plist"
+mk "$L/Preferences/group.com.gone.shared.plist"
+mk "$L/Caches/Some Folder/keep"
+mk "$HOME/bin/tool"
+mkdir -p "$L/LaunchAgents"
+echo "ProgramArguments.0=$HOME/bin/tool" > "$L/LaunchAgents/com.gone.tool.plist"
+echo "ProgramArguments.0=$HOME/bin/missing" > "$L/LaunchAgents/com.gone.dead.plist"
+mk "$A/Gone Vendor/readme"
+mkdir -p "$A/Vendor Links"; ln -s "$A/Stuck.app" "$A/Vendor Links/Stuck"
+mk "$A/Half.app/Contents/Resources/x"
+mk "$A/Phone.app/Wrapper/Phone.app/Info.plist"
+mkdir -p "$HOME/Applications/Chrome Apps.localized"
+gone="$A/Gone Vendor
+$A/Half.app
+$L/Caches/com.gone.app
+$L/HTTPStorages/com.gone.app.binarycookies
+$L/LaunchAgents/com.gone.dead.plist
+$L/Preferences/com.gone.app.plist"
+IFS=$'\n'   # $gone holds paths with spaces
+kept_left() {
+  for p in "$L/Caches/com.fake.helper/keep" "$L/Containers/ABCDE12345.com.fake.browser-helper/keep" "$L/Preferences/com.apple.finder.plist" "$L/Preferences/group.com.gone.shared.plist" \
+           "$L/Caches/Some Folder/keep" "$L/LaunchAgents/com.gone.tool.plist" "$A/Vendor Links/Stuck" "$A/Phone.app/Wrapper/Phone.app/Info.plist" \
+           "$HOME/Applications/Chrome Apps.localized"; do
+    [ -e "$p" ] || [ -L "$p" ] || fail "$1: $p"
+  done
+}
+out=$("$ms" leftovers </dev/null 2>&1 || true)
+for p in $gone; do echo "$out" | grep -qF "$p" || fail "leftover not listed: $p ($out)"; done
+[ "$(echo "$out" | grep -c '^ *[0-9]*\. ')" = 6 ] || fail "listed something it should keep: $out"
+for p in $gone; do [ -e "$p" ] || fail "moved without a tty or --yes: $p"; done
+mk "$L/Caches/com.gonestuck.Stuck/x"
+out=$("$ms" leftovers --yes || true)
+echo "$out" | grep -q "Full Disk Access" || fail "no permission hint after a failed move: $out"
+[ ! -e "$A/Half.app" ] && [ ! -e "$L/Caches/com.gone.app" ] || fail "leftovers not moved: $out"
+rm -rf "$L/Caches/com.gonestuck.Stuck"; kept_left "leftovers --yes took a kept file"
+for p in $gone; do mk "$p/x"; done
+menu "3\n3\n99\nb\nb\nq\n" >/dev/null; menu "3\n3\n1\nn\nb\nb\nq\n" >/dev/null
+for p in $gone; do [ -e "$p" ] || fail "menu moved after declining: $p"; done
+menu "3\n3\n1\ny\nb\nb\nq\n" >/dev/null
+[ ! -e "$A/Gone Vendor" ] && [ -e "$A/Half.app" ] || fail "menu moved the wrong item"
+out=$(menu "3\n3\na\ny\n\nb\nq\n")
+for p in $gone; do [ ! -e "$p" ] || fail "menu left $p"; done
+echo "$out" | grep -q "No leftovers of removed apps found" || fail "list not refreshed: $out"
+kept_left "menu took a kept file"
+IFS=$' \t\n'
 [ -d "$A/Thing.app" ] || fail "other Apple app removed"
 
 stub brew '[ "$1" = outdated ] && echo "git (2.1) < 2.2"'
@@ -338,6 +390,7 @@ echo "$out" | grep -q "Remove 1 cookie from 1 site:" || fail "wrong plural: $out
 
 menu "7\n$(pnum Work)\nk $(snum google.com)\nb\nb\nq\n" >/dev/null
 grep -qx "google.com" "$AS/macsweep/keep-sites" || fail "keep list not saved"
+echo "nosuch.example" >> "$AS/macsweep/keep-sites"   # two lines: macOS awk once choked on this
 menu "7\n$(pnum Work)\na\ny\nb\nb\nq\n" >/dev/null
 [ "$(sqlite3 "$CH/Default/Cookies" "SELECT count(*) FROM cookies WHERE host_key LIKE '%google.com' AND host_key NOT LIKE '%evil%'")" = 2 ] || fail "kept site removed"
 [ "$(sqlite3 "$CH/Default/Cookies" "SELECT count(*) FROM cookies WHERE host_key LIKE '%evil%' OR host_key LIKE '%bank%'")" = 0 ] || fail "all-except-kept missed sites"
