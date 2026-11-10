@@ -6,7 +6,7 @@
 set -uf      # no globbing: every path below is literal
 IFS=$'\n'    # split lists on newlines only, so paths may contain spaces
 
-VERSION="0.9.0"
+VERSION="0.9.1"
 CATEGORIES=$'caches\nlogs\ntrash\nxcode\ndevcaches'
 OPTIN=backups   # cleaned only when named: never part of "clean all"
 MENU=0       # 1 when running inside the menu, which is always interactive
@@ -318,31 +318,44 @@ trash_items() {  # trash_items PATHS [START_KB]
   fi
 }
 
-# Bundle ID makers ("com.fake") of every installed app, lowercased. Spotlight finds apps
-# anywhere; the folder scan covers a Mac with Spotlight turned off.
-installed_makers() {
+# "ID<tab>name" of every installed app. Spotlight finds apps anywhere; the folder scan
+# covers a Mac with Spotlight turned off.
+installed_apps() {
   local a
   { mdfind 'kMDItemContentType == "com.apple.application-bundle"' 2>/dev/null
-    find "$ROOT/Applications" "$HOME/Applications" -maxdepth 3 -name "*.app" -prune 2>/dev/null
-  } | while read -r a; do plist_get "$a/Contents/Info.plist" CFBundleIdentifier; echo; done |
-    awk -F. 'NF > 1 { print tolower($1 "." $2) }' | sort -u
+    find "$ROOT/Applications" "$HOME/Applications" "$ROOT/System/Applications" -maxdepth 3 -name "*.app" -prune 2>/dev/null
+  } | while read -r a; do
+    printf "%s\t%s\n" "$(plist_get "$a/Contents/Info.plist" CFBundleIdentifier)" "$(basename "$a" .app)"
+  done | sort -u
 }
 
 # ~/Library items named after an app ID whose maker has no app installed. Matching the maker,
 # not the whole ID, keeps the files of an installed app's helpers and extensions. Apple's,
 # shared-group and printer items are never listed, nor a launch agent whose program still exists.
-# ponytail: misses leftovers named by app name (Application Support/Foo) and leftovers from a
-# maker that still has another app installed; add name matching if those pile up.
+# A folder named only by an app's name counts when it matches the name part of such an ID
+# (CleanMyMac_5_HealthMonitor for com.macpaw.CleanMyMac5.HealthMonitor), never an installed app's name.
+# ponytail: misses leftovers from a maker that still has another app installed.
 orphans() {
   local L="$HOME/Library" f prog
   find "$L/Application Support" "$L/Caches" "$L/Containers" "$L/Saved Application State" "$L/Logs" \
        "$L/HTTPStorages" "$L/WebKit" "$L/Preferences" "$L/LaunchAgents" -mindepth 1 -maxdepth 1 2>/dev/null |
-  M=$(installed_makers) awk '
-    BEGIN { n = split(ENVIRON["M"], a, "\n"); for (i = 1; i <= n; i++) M[a[i]] }
-    { id = $0; sub(/.*\//, "", id); sub(/^[0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z]\./, "", id)  # team ID
+  APPS=$(installed_apps) awk -F'\t' '
+    function norm(s) { s = tolower(s); gsub(/[^a-z0-9]/, "", s); return s }
+    function base(s) { sub(/.*\//, "", s); return s }
+    BEGIN { n = split(ENVIRON["APPS"], a, "\n")
+            for (i = 1; i <= n; i++) { split(a[i], f, "\t"); split(tolower(f[1]), p, ".")
+                                       if (p[2] != "") M[p[1] "." p[2]]; N[norm(f[2])] } }
+    { path[NR] = $0; id = base($0)
+      sub(/^[0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z]\./, "", id)  # team ID
       id = tolower(id); sub(/\.(savedstate|plist|binarycookies)$/, "", id)
-      if (id ~ /^(com\.apple|group|systemgroup|org\.cups)\./ || id !~ /^[a-z0-9-]+\.[a-z0-9-]+\.[a-z0-9._-]+$/) next
-      split(id, p, "."); if (!((p[1] "." p[2]) in M)) print }' | sort |
+      if (id !~ /^[a-z0-9-]+\.[a-z0-9-]+\.[a-z0-9._-]+$/) { plain[NR] = 1; next }
+      if (id ~ /^(com\.apple|group|systemgroup|org\.cups)\./) next
+      k = split(id, p, "."); if ((p[1] "." p[2]) in M) next
+      gone[NR] = 1; t = ""; for (j = 3; j <= k; j++) { t = t p[j]; T[norm(t)] } }
+    END { for (i = 1; i <= NR; i++) {
+            if (i in gone) print path[i]
+            else if ((i in plain) && path[i] ~ /\/Library\/(Application Support|Caches|Logs)\/[^\/]*$/) {
+              k = norm(base(path[i])); if (length(k) >= 4 && (k in T) && !(k in N)) print path[i] } } }' | sort |
   while read -r f; do
     case "$f" in "$L/LaunchAgents/"*)
       prog=$(plist_get "$f" ProgramArguments.0 || plist_get "$f" Program)
