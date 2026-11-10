@@ -9,7 +9,7 @@ $ macsweep
 
   macsweep — Mac cleanup            Disk: 182.0G free of 994.0G
 
-  1. Clean up junk          (caches, logs, Trash, Xcode, dev caches)
+  1. Clean up junk          (caches, logs, Trash, Xcode, dev and app caches)
   2. Large and duplicate files
   3. Applications           (uninstall, leftovers, updates)
   4. Startup items
@@ -92,6 +92,7 @@ Everything in the menu that can run unattended also has a direct command.
 | `trash` | `~/.Trash` |
 | `xcode` | `~/Library/Developer/Xcode/DerivedData`, `~/Library/Developer/CoreSimulator/Caches`, and the `DeviceSupport` folders in `~/Library/Developer/Xcode`. Xcode rebuilds these when needed |
 | `devcaches` | `~/.npm/_cacache`, `~/.gradle/caches`, `~/.cache` |
+| `appcaches` | Cache folders that Chrome, Slack, Notion and other Chromium or Electron apps keep in `~/Library/Application Support` (`Cache`, `Code Cache`, `GPUCache`, `CacheStorage` and similar). Logins, history and settings stay. The apps rebuild these, so they start slower once afterwards |
 | `backups` | `~/Library/Application Support/MobileSync/Backup`: iPhone and iPad backups. Only cleaned when you pick it, never by "clean all". They may be the only copy of a device and are deleted, not moved to the Trash |
 
 ## Safety

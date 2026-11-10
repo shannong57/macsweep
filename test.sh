@@ -40,6 +40,21 @@ out=$("$ms" scan); echo "$out" | grep -q "caches" || fail "scan output: $out"
 [ -f "$HOME/Documents/keep.txt" ] || fail "deleted Documents"
 [ -f "$outside/precious.txt" ] || fail "followed a symlink out of HOME"
 
+# App caches: only the cache folders inside an app's data go, and never Apple's.
+AS="$HOME/Library/Application Support"
+mk "$AS/Fake Chat/Partitions/x/Code Cache/blob" 50000; mk "$AS/Fake Chat/Service Worker/CacheStorage/blob"
+mk "$AS/Fake Chat/Local Storage/keep"; mk "$AS/Fake Chat/Cookies"; mk "$AS/com.apple.thing/Cache/keep"
+ln -s "$outside" "$AS/Fake Chat/GPUCache"
+"$ms" scan | grep -q "appcaches" || fail "scan misses appcaches"
+"$ms" clean caches --yes >/dev/null; [ -f "$AS/Fake Chat/Partitions/x/Code Cache/blob" ] || fail "caches took an app cache"
+"$ms" clean appcaches --yes >/dev/null
+[ ! -e "$AS/Fake Chat/Partitions/x/Code Cache/blob" ] && [ ! -e "$AS/Fake Chat/Service Worker/CacheStorage/blob" ] || fail "app caches not cleared"
+[ -d "$AS/Fake Chat/Partitions/x/Code Cache" ] || fail "app cache folder itself removed"
+[ -f "$AS/Fake Chat/Local Storage/keep" ] && [ -f "$AS/Fake Chat/Cookies" ] || fail "appcaches took app data"
+[ -f "$AS/com.apple.thing/Cache/keep" ] || fail "appcaches took an Apple cache"
+[ -f "$outside/precious.txt" ] || fail "appcaches followed a symlink out of HOME"
+rm -rf "$AS/Fake Chat" "$AS/com.apple.thing"
+
 mk "$HOME/big.bin" 3000000
 "$ms" big --min 1 | grep -q "big.bin" || fail "big didn't find big.bin"
 "$ms" big --min x 2>/dev/null && fail "accepted bad --min"
