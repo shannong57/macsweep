@@ -173,6 +173,10 @@ mk "$L/Containers/ABCDE12345.com.fake.browser-helper/keep"
 mk "$L/Preferences/com.apple.finder.plist"
 mk "$L/Preferences/group.com.gone.shared.plist"
 mk "$L/Caches/Some Folder/keep"
+mk "$L/Caches/com.gone.WidgetMaker/x"
+mk "$L/Application Support/Widget_Maker/x"            # named after the gone app above
+mk "$L/Caches/com.gone.thing/x"
+mk "$L/Application Support/Thing/keep"               # also the name of an installed app
 mk "$HOME/bin/tool"
 mkdir -p "$L/LaunchAgents"
 echo "ProgramArguments.0=$HOME/bin/tool" > "$L/LaunchAgents/com.gone.tool.plist"
@@ -184,6 +188,9 @@ mk "$A/Phone.app/Wrapper/Phone.app/Info.plist"
 mkdir -p "$HOME/Applications/Chrome Apps.localized"
 gone="$A/Gone Vendor
 $A/Half.app
+$L/Application Support/Widget_Maker
+$L/Caches/com.gone.WidgetMaker
+$L/Caches/com.gone.thing
 $L/Caches/com.gone.app
 $L/HTTPStorages/com.gone.app.binarycookies
 $L/LaunchAgents/com.gone.dead.plist
@@ -191,14 +198,14 @@ $L/Preferences/com.gone.app.plist"
 IFS=$'\n'   # $gone holds paths with spaces
 kept_left() {
   for p in "$L/Caches/com.fake.helper/keep" "$L/Containers/ABCDE12345.com.fake.browser-helper/keep" "$L/Preferences/com.apple.finder.plist" "$L/Preferences/group.com.gone.shared.plist" \
-           "$L/Caches/Some Folder/keep" "$L/LaunchAgents/com.gone.tool.plist" "$A/Vendor Links/Stuck" "$A/Phone.app/Wrapper/Phone.app/Info.plist" \
+           "$L/Caches/Some Folder/keep" "$L/Application Support/Thing/keep" "$L/LaunchAgents/com.gone.tool.plist" "$A/Vendor Links/Stuck" "$A/Phone.app/Wrapper/Phone.app/Info.plist" \
            "$HOME/Applications/Chrome Apps.localized"; do
     [ -e "$p" ] || [ -L "$p" ] || fail "$1: $p"
   done
 }
 out=$("$ms" leftovers </dev/null 2>&1 || true)
 for p in $gone; do echo "$out" | grep -qF "$p" || fail "leftover not listed: $p ($out)"; done
-[ "$(echo "$out" | grep -c '^ *[0-9]*\. ')" = 6 ] || fail "listed something it should keep: $out"
+[ "$(echo "$out" | grep -c '^ *[0-9]*\. ')" = 9 ] || fail "listed something it should keep: $out"
 for p in $gone; do [ -e "$p" ] || fail "moved without a tty or --yes: $p"; done
 mk "$L/Caches/com.gonestuck.Stuck/x"
 out=$("$ms" leftovers --yes || true)
