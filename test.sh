@@ -527,7 +527,13 @@ echo "$out" | grep -q "Remove 1 cookie from 1 site:" || fail "wrong plural: $out
 menu "7\n$(pnum Work)\nk $(snum google.com)\nb\nb\nq\n" >/dev/null
 grep -qx "google.com" "$AS/macsweep/keep-sites" || fail "keep list not saved"
 echo "nosuch.example" >> "$AS/macsweep/keep-sites"   # two lines: macOS awk once choked on this
-menu "7\n$(pnum Work)\na\ny\nb\nb\nq\n" >/dev/null
+# Two sites at once: macOS awk rejects a list with a newline passed by -v, which emptied the keep list.
+menu "7\n$(pnum Work)\nk $(snum bank.co.uk) $(snum evilgoogle.com)\nb\nb\nq\n" >/dev/null
+menu "7\n$(pnum Work)\nu $(snum bank.co.uk) $(snum evilgoogle.com)\nb\nb\nq\n" >/dev/null
+grep -qx "google.com" "$AS/macsweep/keep-sites" || fail "un-keeping two sites emptied the keep list"
+grep -q "bank\|evil" "$AS/macsweep/keep-sites" && fail "two sites not removed from keep list"
+out=$(menu "7\n$(pnum Work)\na\ny\nb\nb\nq\n" 2>&1)
+echo "$out" | grep -q "awk:\|Remove 0 cookies" && fail "cookie count wrong for several sites: $out"
 [ "$(sqlite3 "$CH/Default/Cookies" "SELECT count(*) FROM cookies WHERE host_key LIKE '%google.com' AND host_key NOT LIKE '%evil%'")" = 2 ] || fail "kept site removed"
 [ "$(sqlite3 "$CH/Default/Cookies" "SELECT count(*) FROM cookies WHERE host_key LIKE '%evil%' OR host_key LIKE '%bank%'")" = 0 ] || fail "all-except-kept missed sites"
 [ "$(sqlite3 "$CH/Default/Cookies" "SELECT count(*) FROM cookies WHERE host_key = 'x''y.com'")" = 1 ] || fail "odd host name reached SQL"
