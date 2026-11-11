@@ -6,7 +6,7 @@
 set -uf      # no globbing: every path below is literal
 IFS=$'\n'    # split lists on newlines only, so paths may contain spaces
 
-VERSION="0.13.0"
+VERSION="0.13.1"
 CATEGORIES=$'caches\nlogs\ntrash\nxcode\ndevcaches\nappcaches'
 OPTIN=backups   # cleaned only when named: never part of "clean all"
 MENU=0       # 1 when running inside the menu, which is always interactive
@@ -919,7 +919,7 @@ keep_sites() {  # keep_sites add|remove SITES
   if [ "$1" = add ]; then
     printf "%s\n%s\n" "$(kept_sites)" "$2" | sed '/^$/d' | sort -u > "$KEEP_FILE.new"
   else
-    kept_sites | awk -v k="$2" 'BEGIN { n = split(k, a, "\n"); for (i = 1; i <= n; i++) K[a[i]] } !($0 in K)' > "$KEEP_FILE.new"
+    kept_sites | K="$2" awk 'BEGIN { n = split(ENVIRON["K"], a, "\n"); for (i = 1; i <= n; i++) K[a[i]] } !($0 in K)' > "$KEEP_FILE.new"
   fi
   mv "$KEEP_FILE.new" "$KEEP_FILE"
 }
@@ -1452,7 +1452,7 @@ EOF
     picked=$(echo "$picked" | without_kept)
     [ -n "$picked" ] || { echo "  Nothing to remove: those sites are kept."; continue; }
     n=$(echo "$picked" | wc -l | tr -d ' ')
-    total=$(echo "$sites" | awk -F'\t' -v p="$picked" 'BEGIN { split(p, a, "\n"); for (i in a) P[a[i]] } $2 in P { t += $1 } END { print t + 0 }')
+    total=$(echo "$sites" | P="$picked" awk -F'\t' 'BEGIN { split(ENVIRON["P"], a, "\n"); for (i in a) P[a[i]] } $2 in P { t += $1 } END { print t + 0 }')
     echo "  Remove $(plural "$total" cookie) from $(plural "$n" site):"
     echo "$picked" | head -n 10 | sed 's/^/    /'
     [ "$n" -gt 10 ] && echo "    ...and $((n - 10)) more"
