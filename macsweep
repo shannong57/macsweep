@@ -6,7 +6,7 @@
 set -uf      # no globbing: every path below is literal
 IFS=$'\n'    # split lists on newlines only, so paths may contain spaces
 
-VERSION="0.12.0"
+VERSION="0.13.0"
 CATEGORIES=$'caches\nlogs\ntrash\nxcode\ndevcaches\nappcaches'
 OPTIN=backups   # cleaned only when named: never part of "clean all"
 MENU=0       # 1 when running inside the menu, which is always interactive
@@ -22,10 +22,12 @@ Usage:
   macsweep clean [CATEGORY...]        Delete junk (all categories if none given)
       -n, --dry-run                   Show what would be deleted, delete nothing
       -y, --yes                       Don't ask for confirmation
+      -v, --verbose                   List every app cache folder, not one line per app
   macsweep big [PATH] [--min MB]      List the 20 largest files (default: ~, 500 MB)
   macsweep dupes [PATH] [--min MB]    List files with identical contents (default: ~, 10 MB)
   macsweep uninstall APP [--yes]      Remove an app and everything it left behind
-  macsweep leftovers [--yes]          Move leftovers of already-removed apps to the Trash
+      -n, --dry-run                   Show what would be removed, remove nothing
+  macsweep leftovers [--yes]          Remove what already-removed apps left behind
   macsweep updates                    List outdated Homebrew, App Store and macOS items
   macsweep startup [enable|disable LABEL]  List startup items, or turn one on or off
   macsweep security                   Check security settings, app signatures and startup items
@@ -36,16 +38,35 @@ Categories:
   caches     ~/Library/Caches
   logs       ~/Library/Logs
   trash      ~/.Trash
-  xcode      Xcode DerivedData and simulator caches
+  xcode      Xcode DerivedData, simulator caches and simulators Xcode can no longer run
   devcaches  npm, Gradle and ~/.cache (pip, etc.)
   appcaches  Cache folders apps keep in ~/Library/Application Support (Chrome, Slack, Notion...)
   backups    iPhone and iPad backups. Only when named; never part of "clean all"
 
 Cleaning only touches your own home folder and never needs sudo.
 Some Maintenance tasks in the menu ask for your admin password, and so does
-uninstalling an app that has system-wide files.
+removing an app's system-wide files (uninstall, leftovers).
+What uninstall and leftovers removed is recorded in
+~/Library/Application Support/macsweep/removed.log
 EOF
 }
+
+# Simulators belong to Xcode. With it, simctl deletes the ones it can no longer run.
+# Without any Xcode none of them can run, so the whole folder is junk.
+xcodes() {
+  find "$ROOT/Applications" "$HOME/Applications" -maxdepth 1 -name "Xcode*.app" 2>/dev/null
+  mdfind 'kMDItemCFBundleIdentifier == "com.apple.dt.Xcode"' 2>/dev/null
+}
+# The developer folder of an Xcode with simctl: the selected one, or an installed one when
+# the command line tools are selected instead.
+sim_xcode() {
+  local d
+  for d in "$(xcode-select -p 2>/dev/null)" $(xcodes | sed 's|$|/Contents/Developer|'); do
+    if [ -x "$d/usr/bin/simctl" ]; then echo "$d"; return 0; fi
+  done
+  return 1
+}
+no_xcode() { ! sim_xcode >/dev/null && [ -z "$(xcodes)" ]; }
 
 # Directories whose *contents* get cleared for a category.
 targets() {
@@ -58,7 +79,8 @@ targets() {
                echo "$HOME/Library/Developer/Xcode/iOS DeviceSupport"
                echo "$HOME/Library/Developer/Xcode/watchOS DeviceSupport"
                echo "$HOME/Library/Developer/Xcode/tvOS DeviceSupport"
-               echo "$HOME/Library/Developer/Xcode/visionOS DeviceSupport" ;;
+               echo "$HOME/Library/Developer/Xcode/visionOS DeviceSupport"
+               if no_xcode; then echo "$HOME/Library/Developer/CoreSimulator/Devices"; fi ;;
     backups)   echo "$HOME/Library/Application Support/MobileSync/Backup" ;;
     devcaches) echo "$HOME/.npm/_cacache"
                echo "$HOME/.gradle/caches"
@@ -137,12 +159,25 @@ cmd_scan() {
   echo "Run 'macsweep clean' to reclaim it, or 'macsweep clean --dry-run' to preview."
 }
 
+# The app caches as one line per app. clean --verbose lists every folder.
+appcaches_by_app() {
+  local P="$HOME/Library/Application Support/" d kb app n
+  for d in $(targets appcaches); do
+    safe_target "$d" && printf "%s\t%s\n" "$(size_kb "$d")" "$d"
+  done | P="$P" awk -F'\t' '{ a = substr($2, length(ENVIRON["P"]) + 1); sub(/\/.*/, "", a); kb[a] += $1; n[a]++ }
+      END { for (a in kb) printf "%d\t%s\t%d\n", kb[a], a, n[a] }' | sort -rn |
+  while IFS=$'\t' read -r kb app n; do
+    printf "  %8s  %s (%s)\n" "$(echo "$kb" | human)" "$P$app" "$(plural "$n" "cache folder")"
+  done
+}
+
 cmd_clean() {
-  local dry=0 yes=0 cats="" cat d before after freed=0
+  local dry=0 yes=0 all=0 cats="" cat d before after freed=0 sims="$HOME/Library/Developer/CoreSimulator/Devices"
   while [ $# -gt 0 ]; do
     case "$1" in
       -n|--dry-run) dry=1 ;;
       -y|--yes)     yes=1 ;;
+      -v|--verbose) all=1 ;;
       -*) die "unknown option: $1" ;;
       *) targets "$1" >/dev/null || die "unknown category: $1 (try: caches logs trash xcode devcaches appcaches backups)"
          cats="$cats$1"$'\n' ;;
@@ -153,11 +188,13 @@ cmd_clean() {
 
   echo "Will clear:"
   for cat in $cats; do
+    if [ "$cat" = appcaches ] && [ "$all" != 1 ]; then appcaches_by_app; continue; fi
     for d in $(targets "$cat"); do
       if blocked "$d"; then echo "  skipped   $d (no access). $FDA_HINT"; continue; fi
       safe_target "$d" || continue
       printf "  %8s  %s\n" "$(size_kb "$d" | human)" "$d"
     done
+    if [ "$cat" = xcode ] && sim_xcode >/dev/null; then echo "            simulators Xcode can no longer run (xcrun simctl delete unavailable)"; fi
   done
   case $'\n'"$cats" in *$'\n'backups$'\n'*)
     echo "  iPhone and iPad backups may be the only copy of a device. They are deleted, not moved to the Trash." ;;
@@ -179,6 +216,10 @@ cmd_clean() {
       freed=$((freed + before - after))
       [ "$after" -gt 64 ] && echo "  note: some items in $d are in use or protected; left in place"
     done
+    if [ "$cat" = xcode ] && d=$(sim_xcode); then
+      before=$(size_kb "$sims"); run env DEVELOPER_DIR="$d" xcrun simctl delete unavailable; after=$(size_kb "$sims")
+      freed=$((freed + before - after))
+    fi
   done
   echo "Freed $(echo "$freed" | human)."
 }
@@ -299,11 +340,8 @@ dock_forget() {  # dock_forget ID
 # Clears the installer's records of an app's packages, its saved preferences still held
 # in memory, and its Dock icon.
 forget_app() {  # forget_app ID
-  local pkg
   case "$1" in ''|.*|*[!A-Za-z0-9._-]*) return 0 ;; esac
-  for pkg in $(pkgutil --pkgs 2>/dev/null | ID="$1" M="${MAKER:-}" awk '{ l = tolower($0); i = tolower(ENVIRON["ID"]); m = ENVIRON["M"] } l == i || index(l, i ".") == 1 || (m != "" && index(l, m ".") == 1)' | without_theirs); do
-    run sudo pkgutil --forget "$pkg"
-  done
+  remove_items "$(pkgutil --pkgs 2>/dev/null | ID="$1" M="${MAKER:-}" awk '{ l = tolower($0); i = tolower(ENVIRON["ID"]); m = ENVIRON["M"] } l == i || index(l, i ".") == 1 || (m != "" && index(l, m ".") == 1)' | without_theirs | sed 's/^/pkg:/')"
   killall cfprefsd 2>/dev/null
   dock_forget "$1"
 }
@@ -376,7 +414,7 @@ related_items() {  # related_items NAME
 under_sys() { P="$ROOT/Library/" awk -v want="$1" '(index($0, ENVIRON["P"]) == 1) == want'; }
 
 uninstall_app() {
-  local app="$1" yes="${2:-0}" plist="$1/Contents/Info.plist" name id ver all items sys p kb running rel sel
+  local app="$1" yes="${2:-0}" dry="${3:-0}" plist="$1/Contents/Info.plist" name id ver all items sys p kb running rel sel
   name=$(basename "$app" .app)
   id=$(plist_get "$plist" CFBundleIdentifier)
   ver=$(plist_get "$plist" CFBundleShortVersionString)
@@ -402,6 +440,14 @@ uninstall_app() {
     echo "Stays in place: $HOME/Library/Developer ($(size_kb "$HOME/Library/Developer" | human))."
     echo "  It holds simulators and archived builds. For the part Xcode can rebuild: macsweep clean xcode"
   fi
+  if [ "$dry" = 1 ]; then
+    rel=$(related_items "$name" | grep -vxF -e "$all")   # the real run looks after those are gone
+    if [ -n "$rel" ]; then
+      echo "These have a similar name and may also belong to $name. You would be asked which to remove:"
+      print_items "$rel"
+    fi
+    echo "(dry run — nothing removed)"; return 0
+  fi
   running=$(app_pids "$app")
   if [ -n "$running" ]; then
     if [ "$yes" = 1 ]; then echo "  $name is running. Quit it, then try again, or leave out --yes to force quit it."; return 1; fi
@@ -421,11 +467,9 @@ uninstall_app() {
     echo "  Couldn't move $app to the Trash, so its files were left in place. It may need admin rights: try dragging it to the Trash in Finder."
     return 1
   fi
-  trash_items "$items" "$kb"
-  if [ -n "$sys" ]; then
-    # shellcheck disable=SC2086  # one path per line
-    run sudo rm -rf -- $sys || echo "  Couldn't delete the system-wide files. They are still in place."
-  fi
+  log "$(date '+%Y-%m-%d %H:%M')  uninstall $name $ver ($id)"
+  log "  trash    $app"
+  remove_items "$all" "$kb"
   forget_app "$id"
   rel=$(related_items "$name")
   if [ -n "$rel" ]; then
@@ -437,16 +481,34 @@ uninstall_app() {
       printf "Remove which? (numbers, Enter for none): "
       read -r reply || reply=""
       if sel=$(pick "$rel" "$reply"); then
-        items=$(echo "$sel" | under_sys 0); sys=$(echo "$sel" | under_sys 1)
-        [ -z "$items" ] || trash_items "$items"
-        # shellcheck disable=SC2086  # one path per line
-        [ -z "$sys" ] || run sudo rm -rf -- $sys || echo "  Couldn't delete the system-wide files. They are still in place."
+        remove_items "$sel"
       else
         echo "Left in place."
       fi
     fi
   fi
   echo "Empty the Trash to finish removing $name."
+  echo "A record of what was removed is in $LOG_FILE"
+}
+
+# A plain record of what uninstall and leftovers removed: the only trace of files that skip the Trash.
+LOG_FILE="$HOME/Library/Application Support/macsweep/removed.log"
+log() { mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null && echo "$*" >> "$LOG_FILE"; }
+
+# Removes each item its own way and logs what went: home items to the Trash, /Library items
+# deleted with sudo, "pkg:ID" installer records forgotten. START_KB as in trash_items.
+remove_items() {  # remove_items LIST [START_KB]
+  local home sys p
+  sys=$(echo "$1" | grep -v '^pkg:' | under_sys 1)
+  home=$(echo "$1" | grep -v '^pkg:' | under_sys 0)
+  if [ -n "$home" ] || [ -n "${2:-}" ]; then trash_items "$home" "${2:-0}"; fi
+  if [ -n "$sys" ]; then
+    # shellcheck disable=SC2086  # one path per line
+    run sudo rm -rf -- $sys || echo "  Couldn't delete the system-wide files. They are still in place."
+  fi
+  for p in $(echo "$1" | sed -n 's/^pkg://p'); do run sudo pkgutil --forget "$p" && log "  forgot   $p"; done
+  for p in $home; do [ -e "$p" ] || [ -L "$p" ] || log "  trash    $p"; done
+  for p in $sys; do [ -e "$p" ] || [ -L "$p" ] || log "  deleted  $p"; done
 }
 
 # Moves each path to the Trash and reports the total. START_KB counts what was already moved.
@@ -474,32 +536,47 @@ installed_apps() {
   done | sort -u
 }
 
-# ~/Library items named after an app ID whose maker has no app installed. Matching the maker,
+# Library items named after an app ID whose maker has no app installed. Matching the maker,
 # not the whole ID, keeps the files of an installed app's helpers and extensions. Apple's,
-# shared-group and printer items are never listed, nor a launch agent whose program still exists.
+# shared-group and printer items are never listed, nor a launch agent whose program still exists,
+# nor anything whose maker's name is part of an installed app's name or ID.
+# Installer records count when their files are all gone and their maker passes the same checks.
 # A folder named only by an app's name counts when it matches the name part of such an ID
 # (CleanMyMac_5_HealthMonitor for com.macpaw.CleanMyMac5.HealthMonitor), never an installed app's name.
-# ponytail: misses leftovers from a maker that still has another app installed.
+# In /Library, where removal is for good, only items named by ID count, and never those of a
+# maker with a background job whose program still exists: a driver or VPN has no app.
+# ponytail: misses leftovers from a maker that still has another app installed, and group.* containers.
 orphans() {
-  local L="$HOME/Library" f prog
-  find "$L/Application Support" "$L/Caches" "$L/Containers" "$L/Saved Application State" "$L/Logs" \
-       "$L/HTTPStorages" "$L/WebKit" "$L/Preferences" "$L/LaunchAgents" -mindepth 1 -maxdepth 1 2>/dev/null |
-  APPS=$(installed_apps) awk -F'\t' '
+  local L="$HOME/Library" S="$ROOT/Library" f prog live=""
+  for f in $(find "$S/LaunchAgents" "$S/LaunchDaemons" -maxdepth 1 -name "*.plist" 2>/dev/null); do
+    prog=$(plist_get "$f" ProgramArguments.0 || plist_get "$f" Program)
+    if [ -n "$prog" ] && [ -e "$prog" ]; then live="$live$(basename "$f")"$'\n'; fi
+  done
+  # shellcheck disable=SC2046  # one folder per line
+  { find "$L/Application Support" "$L/Caches" "$L/Containers" "$L/Saved Application State" "$L/Logs" \
+       "$L/HTTPStorages" "$L/WebKit" "$L/Preferences" "$L/LaunchAgents" "$L/Group Containers" \
+       "$L/Application Scripts" "$L/Cookies" "$L/Preferences/ByHost" \
+       $(echo "$SYS_DIRS" | sed "s|^|$S/|") -mindepth 1 -maxdepth 1 2>/dev/null; dead_receipts; } |
+  APPS=$(installed_apps) LIVE="$live" SYS="$S/" awk -F'\t' '
     function norm(s) { s = tolower(s); gsub(/[^a-z0-9]/, "", s); return s }
     function base(s) { sub(/.*\//, "", s); return s }
     BEGIN { n = split(ENVIRON["APPS"], a, "\n")
             for (i = 1; i <= n; i++) { split(a[i], f, "\t"); split(tolower(f[1]), p, ".")
-                                       if (p[2] != "") M[p[1] "." p[2]]; N[norm(f[2])] } }
-    { path[NR] = $0; id = base($0)
+                                       if (p[2] != "") M[p[1] "." p[2]]; N[norm(f[2])]; N[norm(f[1])] }
+            n = split(tolower(ENVIRON["LIVE"]), a, "\n")
+            for (i = 1; i <= n; i++) { split(a[i], p, "."); if (p[2] != "") LV[p[1] "." p[2]] } }
+    { path[NR] = $0; id = base($0); if (index($0, ENVIRON["SYS"]) == 1 || sub(/^pkg:/, "", id)) sys[NR] = 1
       sub(/^[0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z]\./, "", id)  # team ID
       id = tolower(id); sub(/\.(savedstate|plist|binarycookies)$/, "", id)
       if (id !~ /^[a-z0-9-]+\.[a-z0-9-]+\.[a-z0-9._-]+$/) { plain[NR] = 1; next }
-      if (id ~ /^(com\.apple|group|systemgroup|org\.cups)\./) next
-      k = split(id, p, "."); if ((p[1] "." p[2]) in M) next
+      if (id ~ /^(group|systemgroup|org\.cups)\./ || id ~ /(^|\.)com\.apple\./) next
+      k = split(id, p, "."); if ((NR in sys) && ((p[1] "." p[2]) in LV)) next
+      for (m in M) if (index("." id ".", "." m ".")) next                     # an installed maker, anywhere in the name
+      if (length(p[2]) >= 4) for (x in N) if (index(x, norm(p[2]))) next      # com.dropbox.* next to Dropbox (com.getdropbox)
       gone[NR] = 1; t = ""; for (j = 3; j <= k; j++) { t = t p[j]; T[norm(t)] } }
     END { for (i = 1; i <= NR; i++) {
             if (i in gone) print path[i]
-            else if ((i in plain) && path[i] ~ /\/Library\/(Application Support|Caches|Logs)\/[^\/]*$/) {
+            else if ((i in plain) && !(i in sys) && path[i] ~ /\/Library\/(Application Support|Caches|Logs)\/[^\/]*$/) {
               k = norm(base(path[i])); if (length(k) >= 4 && (k in T) && !(k in N)) print path[i] } } }' | sort |
   while read -r f; do
     case "$f" in "$L/LaunchAgents/"*)
@@ -523,11 +600,40 @@ dead_app_folders() {
   done
 }
 
+# "pkg:ID" for installer records whose files are all gone. Updaters install to temporary
+# places, so orphans still checks the maker. Forgetting a record deletes nothing else.
+dead_receipts() {
+  local pkg loc f n
+  for pkg in $(pkgutil --pkgs 2>/dev/null | grep -v '^com\.apple\.'); do
+    loc=$(pkgutil --pkg-info "$pkg" 2>/dev/null | sed -n 's/^location: //p')
+    n=0
+    for f in $(pkgutil --only-files --files "$pkg" 2>/dev/null); do
+      n=1
+      if [ -e "$ROOT/$loc/$f" ] || [ -L "$ROOT/$loc/$f" ]; then n=2; break; fi
+    done
+    if [ "$n" = 1 ]; then echo "pkg:$pkg"; fi
+  done
+}
+
 all_leftovers() { dead_app_folders; orphans; }
 
 print_items() {
   local i=0 p
-  for p in $1; do i=$((i + 1)); printf "  %3s. %8s  %s\n" "$i" "$(size_kb "$p" | human)" "$p"; done
+  for p in $1; do
+    i=$((i + 1))
+    case "$p" in
+      pkg:*) printf "  %3s. %8s  installer record %s\n" "$i" "" "${p#pkg:}" ;;
+      *) printf "  %3s. %8s  %s\n" "$i" "$(size_kb "$p" | human)" "$p" ;;
+    esac
+  done
+}
+
+# Says which of the listed items skip the Trash.
+for_good_note() {
+  if [ -n "$(echo "$1" | under_sys 1)$(echo "$1" | grep '^pkg:')" ]; then
+    echo "Items in /Library and installer records are removed for good and ask for your admin password."
+    echo "Everything else goes to the Trash."
+  fi
 }
 
 cmd_leftovers() {
@@ -537,15 +643,19 @@ cmd_leftovers() {
   [ -n "$items" ] || { echo "No leftovers of removed apps found."; return 0; }
   echo "Leftovers of apps that are no longer installed:"
   print_items "$items"
-  [ "$yes" = 1 ] || confirm "Move all of these to the Trash?" || return 0
-  trash_items "$items"
+  for_good_note "$items"
+  [ "$yes" = 1 ] || confirm "Remove all of these?" || return 0
+  log "$(date '+%Y-%m-%d %H:%M')  leftovers"
+  remove_items "$items"
+  echo "A record of what was removed is in $LOG_FILE"
 }
 
 cmd_uninstall() {
-  local yes=0 name="" app
+  local yes=0 dry=0 name="" app
   while [ $# -gt 0 ]; do
     case "$1" in
       -y|--yes) yes=1 ;;
+      -n|--dry-run) dry=1 ;;
       -*) die "unknown option: $1" ;;
       *) name="$1" ;;
     esac
@@ -557,7 +667,7 @@ cmd_uninstall() {
     if (substr(p, length(p) - length(s) + 1) == s) { print $2; exit }
   }')
   [ -n "$app" ] || die "no app named $name (of Apple's own apps, only Xcode and macOS installers can be removed)"
-  uninstall_app "$app" "$yes"
+  uninstall_app "$app" "$yes" "$dry"
 }
 
 cmd_updates() {
@@ -1053,16 +1163,18 @@ menu_leftovers() {
     if [ "$scan" = 1 ]; then echo; echo "  Looking for leftovers of removed apps..."; items=$(all_leftovers); fi
     [ -n "$items" ] || { say_back "  No leftovers of removed apps found."; return; }
     print_items "$items"
+    for_good_note "$items"
     echo
-    ask "Move which to the Trash? (numbers, a for all, b to go back): "
+    ask "Remove which? (numbers, a for all, b to go back): "
     scan=0
     case "$reply" in
       b|B|"") return ;;
       a|A) sel=$items ;;
       *) sel=$(pick "$items" "$reply") || { echo "  Not a valid choice."; continue; } ;;
     esac
-    confirm "Move $(plural "$(echo "$sel" | grep -c .)" item) to the Trash?" || continue
-    trash_items "$sel"
+    confirm "Remove $(plural "$(echo "$sel" | grep -c .)" item)?" || continue
+    log "$(date '+%Y-%m-%d %H:%M')  leftovers"
+    remove_items "$sel"
     scan=1
   done
 }
@@ -1227,7 +1339,7 @@ EOF
 }
 
 menu_maintenance() {
-  local dates count
+  local dates count dev
   cls
   while :; do
     echo
@@ -1260,10 +1372,9 @@ menu_maintenance() {
       6) if ! command -v brew >/dev/null; then echo "  Homebrew isn't installed."; continue; fi
          brew cleanup -n 2>/dev/null | tail -n 1 | sed 's/^==> /  /'
          if confirm "Clean up Homebrew?"; then run brew cleanup; task_result $?; fi ;;
-      7) # xcode-select first: a bare xcrun offers to install the developer tools.
-         if ! xcode-select -p >/dev/null 2>&1; then echo "  Xcode isn't installed."; continue; fi
+      7) if ! dev=$(sim_xcode); then echo "  Xcode isn't installed."; continue; fi
          echo "  Removes simulators for iOS versions this Xcode no longer has."
-         if confirm "Delete unavailable simulators?"; then run xcrun simctl delete unavailable; task_result $?; fi ;;
+         if confirm "Delete unavailable simulators?"; then run env DEVELOPER_DIR="$dev" xcrun simctl delete unavailable; task_result $?; fi ;;
       8) if ! command -v docker >/dev/null; then echo "  Docker isn't installed."; continue; fi
          echo "  Deletes stopped containers, unused networks, dangling images and the build cache."
          echo "  Docker must be running. Volumes are kept."

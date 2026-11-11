@@ -22,6 +22,10 @@ ln -s "$outside" "$HOME/Library/Developer/Xcode/DerivedData" 2>/dev/null \
   || { mkdir -p "$HOME/Library/Developer/Xcode"; ln -s "$outside" "$HOME/Library/Developer/Xcode/DerivedData"; }
 
 ms="$here/macsweep"
+# No test may ask a real Xcode to delete simulators.
+mkdir -p "$root/bin"
+for c in xcode-select xcrun mdfind; do printf '#!/bin/sh\nexit 2\n' > "$root/bin/$c"; chmod +x "$root/bin/$c"; done
+export PATH="$root/bin:$PATH"
 
 out=$("$ms" scan); echo "$out" | grep -q "caches" || fail "scan output: $out"
 "$ms" clean --dry-run >/dev/null
@@ -47,6 +51,10 @@ mk "$AS/Fake Chat/Local Storage/keep"; mk "$AS/Fake Chat/Cookies"; mk "$AS/com.a
 ln -s "$outside" "$AS/Fake Chat/GPUCache"
 "$ms" scan | grep -q "appcaches" || fail "scan misses appcaches"
 "$ms" clean caches --yes >/dev/null; [ -f "$AS/Fake Chat/Partitions/x/Code Cache/blob" ] || fail "caches took an app cache"
+out=$("$ms" clean appcaches --dry-run)
+echo "$out" | grep -q "Fake Chat (2 cache folders)" || fail "app caches not grouped by app: $out"
+echo "$out" | grep -q "Code Cache" && fail "grouped preview still lists folders: $out"
+"$ms" clean appcaches -n --verbose | grep -q "Partitions/x/Code Cache" || fail "--verbose doesn't list folders"
 "$ms" clean appcaches --yes >/dev/null
 [ ! -e "$AS/Fake Chat/Partitions/x/Code Cache/blob" ] && [ ! -e "$AS/Fake Chat/Service Worker/CacheStorage/blob" ] || fail "app caches not cleared"
 [ -d "$AS/Fake Chat/Partitions/x/Code Cache" ] || fail "app cache folder itself removed"
@@ -149,6 +157,11 @@ echo "$out" | grep -q "Thing" && fail "uninstall list shows Apple app"
 [ -d "$A/Thing.app" ] || fail "Apple app removed"
 "$ms" uninstall "Fake App" </dev/null &>/dev/null && fail "uninstalled without a tty or --yes"
 "$ms" uninstall Nope --yes 2>/dev/null && fail "accepted unknown app"
+out=$("$ms" uninstall "Fake App" --dry-run </dev/null)
+echo "$out" | grep -q "nothing removed" || fail "uninstall dry run: $out"
+[ "$(echo "$out" | grep -c "Caches/com.fake.app$")" = 1 ] || fail "uninstall dry run lists an item twice: $out"
+[ -d "$A/Fake App.app" ] && [ -f "$L/Caches/com.fake.app/data" ] || fail "uninstall dry run removed something"
+grep -q "^sudo\|^tccutil\|^launchctl\|^killall\|^osascript" "$calls" && fail "uninstall dry run ran a command: $(cat "$calls")"
 menu "3\n1\n99\n0\nabc\nb\nb\nq\n" >/dev/null
 menu "3\n1\n1\nn\nb\nb\nq\n" >/dev/null
 [ -d "$A/Fake App.app" ] || fail "uninstalled after declining"
@@ -204,6 +217,11 @@ for c in "sudo launchctl bootout system/com.fake.app" "launchctl bootout gui/.*/
 done
 grep -q -- "--forget com.fake.app2.pkg\|--forget com.fake.app.beta.pkg" "$calls" && fail "forgot another app's package"
 echo "$out" | grep -q "Moved" || fail "no result message"
+log="$L/Application Support/macsweep/removed.log"
+for c in "uninstall Fake App 1.2.3 (com.fake.app)" "trash    .*Caches/com.fake.app$" "deleted  .*LaunchDaemons/com.fake.app.plist" "forgot   com.fake.app.pkg"; do
+  grep -q "$c" "$log" || fail "uninstall not logged: $c ($(cat "$log"))"
+done
+grep -q "com.fake.app2" "$log" && fail "logged a file that stayed"
 
 # Solo Tool is its maker's only app, so everything under com.solo goes with it. Fake App above was not:
 # Stuck shares com.fake, which is why com.fake.app2 survived. Similar names are offered, never taken unasked.
@@ -302,6 +320,38 @@ echo "$out" | grep -q "No leftovers of removed apps found" || fail "list not ref
 kept_left "menu took a kept file"
 IFS=$' \t\n'
 [ -d "$A/Thing.app" ] || fail "other Apple app removed"
+
+# Leftovers also covers the folders uninstall does, /Library and installer records. In /Library only
+# ID-named items count, and a maker with a working background job is still installed.
+SL="$MACSWEEP_ROOT/Library"
+mk "$L/Group Containers/ABCDE12345.com.gone.app/x"; mk "$L/Application Scripts/com.gone.app/x"
+mk "$L/Group Containers/ABCDE12345.groups.com.apple.thing/keep"
+mk "$SL/PrivilegedHelperTools/com.gone.app.helper"; mk "$SL/Application Support/Gone App/keep"
+mk "$SL/Preferences/com.driver.thing.plist"; mk "$SL/Application Support/regid.1986-12.com.fake/keep"
+mk "$L/Caches/com.stuck.Updater/keep"                # maker named like the installed app Stuck (com.fake.stuck)
+printf 'Label=com.driver.daemon\nProgram=%s\n' "$HOME/bin/tool" > "$SL/LaunchDaemons/com.driver.daemon.plist"
+stub pkgutil 'case "$1" in
+  --pkgs) printf "com.gone.pkg\ncom.fake.live.pkg\ncom.apple.pkg.X\ncom.empty.pkg\ncom.fake.updated.pkg\n" ;;
+  --pkg-info) echo "location: Applications" ;;
+  --only-files) case "$3" in com.gone.pkg|com.fake.updated.pkg) echo "Gone.app/x" ;; com.fake.live.pkg) echo "Stuck.app/Contents/Info.plist" ;; esac ;;
+esac; exit 0'
+: > "$calls"
+out=$("$ms" leftovers --yes)
+for p in "$L/Group Containers/ABCDE12345.com.gone.app" "$L/Application Scripts/com.gone.app" "$SL/PrivilegedHelperTools/com.gone.app.helper"; do
+  [ ! -e "$p" ] || fail "leftover kept: $p ($out)"
+done
+for p in "$L/Group Containers/ABCDE12345.groups.com.apple.thing/keep" "$SL/Application Support/Gone App/keep" \
+         "$SL/Preferences/com.driver.thing.plist" "$SL/LaunchDaemons/com.driver.daemon.plist" "$SL/LaunchDaemons/com.fake.app2.plist" \
+         "$SL/Application Support/regid.1986-12.com.fake/keep" "$L/Caches/com.stuck.Updater/keep"; do
+  [ -f "$p" ] || fail "leftovers took a file it should keep: $p ($out)"
+done
+echo "$out" | grep -q "installer record com.gone.pkg" || fail "dead installer record not listed: $out"
+grep -q -- "--forget com.gone.pkg" "$calls" || fail "dead installer record kept: $out"
+grep -q -- "--forget com.fake.live.pkg\|--forget com.apple\|--forget com.empty\|--forget com.fake.updated" "$calls" && fail "forgot a live installer record"
+echo "$out" | grep -q "removed for good" || fail "no warning that /Library items skip the Trash: $out"
+grep -q "deleted  .*com.gone.app.helper" "$log" || fail "leftovers not logged: $(cat "$log")"
+grep -q "forgot   com.gone.pkg" "$log" || fail "forgotten record not logged: $(cat "$log")"
+rm -r "$SL/LaunchDaemons/com.driver.daemon.plist" "$SL/Preferences/com.driver.thing.plist" "$L/Caches/com.stuck.Updater"
 
 stub brew '[ "$1" = outdated ] && echo "git (2.1) < 2.2"'
 stub softwareupdate 'printf "Software Update found:\n* Label: macOS 99.1\n\tTitle: macOS\n"'
@@ -506,7 +556,7 @@ app "$A" "Install macOS Test" com.apple.InstallAssistant.macOSTest 1000
 
 stub sudo '"$@"'
 stub brew '[ "$1" = cleanup ] && [ "${2:-}" = -n ] && echo "==> This operation would free approximately 9MB of disk space."; exit 0'
-stub xcode-select 'echo /Applications/Xcode.app/Contents/Developer'
+stub xcode-select 'echo "$MACSWEEP_ROOT/XcodeDev"'; mk "$MACSWEEP_ROOT/XcodeDev/usr/bin/simctl"; chmod +x "$MACSWEEP_ROOT/XcodeDev/usr/bin/simctl"
 stub xcrun ''
 stub docker ''
 : > "$calls"
@@ -516,7 +566,19 @@ menu "5\n6\ny\n7\ny\n8\ny\nb\nq\n" >/dev/null
 grep -qx "brew cleanup" "$calls" || fail "brew cleanup not run"
 grep -q "xcrun simctl delete unavailable" "$calls" || fail "simulators not cleaned"
 grep -q "docker system prune -f" "$calls" || fail "docker not cleaned"
+# With Xcode, clean asks it to delete the simulators it can't run. With none, they all go.
+SIM="$HOME/Library/Developer/CoreSimulator/Devices"; mk "$SIM/ABC/data"
+: > "$calls"
+"$ms" clean xcode --dry-run | grep -q "simctl delete unavailable" || fail "simulator cleanup not previewed"
+grep -q "simctl delete" "$calls" && fail "dry run deleted simulators"
+"$ms" clean xcode --yes >/dev/null
+grep -q "xcrun simctl delete unavailable" "$calls" && [ -f "$SIM/ABC/data" ] || fail "clean xcode should leave simulators to Xcode"
 stub xcode-select 'exit 2'
+"$ms" clean xcode --yes >/dev/null
+[ ! -e "$SIM/ABC" ] && [ -d "$SIM" ] || fail "simulators kept though no Xcode is installed"
+mk "$SIM/ABC/data"; app "$A" Xcode-beta com.apple.dt.Xcode 10
+"$ms" clean xcode --yes >/dev/null; [ -f "$SIM/ABC/data" ] || fail "simulators cleared though an Xcode is installed"
+rm -rf "$A/Xcode-beta.app" "$SIM"
 : > "$calls"
 menu "5\n7\nb\nq\n" | grep -q "Xcode isn't installed" || fail "missing Xcode not reported"
 grep -q xcrun "$calls" && fail "ran xcrun without Xcode"

@@ -74,11 +74,11 @@ Everything in the menu that can run unattended also has a direct command.
 |---|---|
 | `macsweep` | Open the menu. Without a terminal, it runs `scan` instead |
 | `macsweep scan` | Show reclaimable space per category |
-| `macsweep clean [CATEGORY...]` | Delete junk, asking first. `--dry-run` previews, `--yes` skips the prompt |
+| `macsweep clean [CATEGORY...]` | Delete junk, asking first. `--dry-run` previews, `--yes` skips the prompt. App caches show as one line per app; `--verbose` lists every folder |
 | `macsweep big [PATH] [--min MB]` | List the 20 largest files (report only, never deletes) |
 | `macsweep dupes [PATH] [--min MB]` | List files with identical contents (report only, never deletes) |
-| `macsweep uninstall APP [--yes]` | Remove an app and everything it left behind |
-| `macsweep leftovers [--yes]` | Move leftovers of already-removed apps to the Trash |
+| `macsweep uninstall APP [--yes]` | Remove an app and everything it left behind. `--dry-run` shows what would go and removes nothing |
+| `macsweep leftovers [--yes]` | Remove what already-removed apps left behind |
 | `macsweep security` | Report on security settings, app signatures and startup items |
 | `macsweep performance` | Report what's using CPU, memory and disk right now |
 | `macsweep updates` | List what's outdated (report only) |
@@ -90,7 +90,7 @@ Everything in the menu that can run unattended also has a direct command.
 | `caches` | `~/Library/Caches` |
 | `logs` | `~/Library/Logs` |
 | `trash` | `~/.Trash` |
-| `xcode` | `~/Library/Developer/Xcode/DerivedData`, `~/Library/Developer/CoreSimulator/Caches`, and the `DeviceSupport` folders in `~/Library/Developer/Xcode`. Xcode rebuilds these when needed |
+| `xcode` | `~/Library/Developer/Xcode/DerivedData`, `~/Library/Developer/CoreSimulator/Caches`, and the `DeviceSupport` folders in `~/Library/Developer/Xcode`. Xcode rebuilds these when needed. It also asks Xcode to delete the simulators it can no longer run (`xcrun simctl delete unavailable`). If no Xcode is installed at all, every simulator in `~/Library/Developer/CoreSimulator/Devices` is cleared, since nothing can run them |
 | `devcaches` | `~/.npm/_cacache`, `~/.gradle/caches`, `~/.cache` |
 | `appcaches` | Cache folders that Chrome, Slack, Notion and other Chromium or Electron apps keep in `~/Library/Application Support` (`Cache`, `Code Cache`, `GPUCache`, `CacheStorage` and similar). Logins, history and settings stay. The apps rebuild these, so they start slower once afterwards |
 | `backups` | `~/Library/Application Support/MobileSync/Backup`: iPhone and iPad backups. Only cleaned when you pick it, never by "clean all". They may be the only copy of a device and are deleted, not moved to the Trash |
@@ -102,8 +102,9 @@ Everything in the menu that can run unattended also has a direct command.
 - Asks before deleting. Without a terminal it refuses unless you pass `--yes`.
 - Apps rebuild their caches, so the first launch afterwards may be slower.
 - Uninstalling moves the app and its files in your home folder to the Trash, so Finder's Put Back can restore them until you empty it. If the app is running, it offers to force quit it first (unsaved work in it is lost; with `--yes` it refuses instead). It refuses Apple's own apps, like Pages, except Xcode and old macOS installers. Xcode from the App Store belongs to the system, so Finder may ask for an admin password. Its simulators and archived builds in `~/Library/Developer` stay in place, and the uninstaller shows their size. Its files are matched on the app's ID (alone, or with a helper name, team ID or file ending around it) and on its exact name. Files named after another installed app are never taken, even when its ID starts the same way. When the app is the last one installed from its maker, everything under the maker's part of the ID goes too (`com.dropbox.*` along with `com.dropbox.client`); the uninstaller says so before you confirm. Afterwards it lists items that only have a similar name and lets you pick which of those to remove. None are removed unless you pick them, and with `--yes` they are only listed.
-- Leftovers of removed apps are files in `~/Library` named after an app ID whose maker (the `com.example` part) has no app installed, plus folders in Applications that no longer hold a working app. Apple's files, shared-group files and launch agents whose program still exists are never listed. Everything goes to the Trash. A folder named only by the app's name is listed when it matches the name in such an ID (`CleanMyMac_5_HealthMonitor` for `com.macpaw.CleanMyMac5.HealthMonitor`) and no installed app has that name. Leftovers from a maker that still has another app installed aren't found.
+- Leftovers of removed apps are files in `~/Library` and `/Library` named after an app ID whose maker (the `com.example` part) has no app installed, plus folders in Applications that no longer hold a working app, plus installer records whose files are all gone. Apple's files, shared-group files and launch agents whose program still exists are never listed, and neither is anything whose maker's name is part of an installed app's name or ID (`com.dropbox.*` while Dropbox is installed). In `/Library`, a maker with a background job whose program still exists counts as installed, so drivers and VPNs without an app are left alone. Items in your home folder go to the Trash. Items in `/Library` and installer records need your admin password and are removed for good; the list says so before you confirm. A folder named only by the app's name is listed when it matches the name in such an ID (`CleanMyMac_5_HealthMonitor` for `com.macpaw.CleanMyMac5.HealthMonitor`) and no installed app has that name. Leftovers from a maker that still has another app installed aren't found.
 - The uninstaller also removes what the app put outside your home folder: its startup jobs, helper tools and files in `/Library`. These are listed before you confirm, need your admin password, and are deleted for good instead of going to the Trash. It then clears the app's privacy permissions, its installer records and its Dock icon.
+- Uninstall and leftovers write what they removed to `~/Library/Application Support/macsweep/removed.log`: one line per item, marked `trash`, `deleted` or `forgot` (an installer record). For files that skip the Trash it is the only record.
 - A few traces can't be removed this way: passwords the app saved in your keychain, its App Store purchase record, and data it kept in a folder whose name has nothing of the app's or maker's name in it.
 - System-wide startup daemons are never changed for you. You get the `sudo` command instead.
 - Turning a startup item off can be reversed from the same menu. Removing Time Machine snapshots can't be undone, so the menu says so first.
