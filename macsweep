@@ -6,7 +6,7 @@
 set -uf      # no globbing: every path below is literal
 IFS=$'\n'    # split lists on newlines only, so paths may contain spaces
 
-VERSION="0.13.1"
+VERSION="0.13.2"
 CATEGORIES=$'caches\nlogs\ntrash\nxcode\ndevcaches\nappcaches'
 OPTIN=backups   # cleaned only when named: never part of "clean all"
 MENU=0       # 1 when running inside the menu, which is always interactive
@@ -1032,7 +1032,7 @@ remove_snapshots() {
 
 task_result() { if [ "$1" = 0 ]; then echo "  Done."; else echo "  That didn't work."; fi; }
 
-# Clears the screen when switching menus. Only on a real screen, so scripts and tests
+# Clears the screen after every menu answer (see ask). Only on a real screen, so scripts and tests
 # never see escape codes.
 cls() { if [ -t 1 ]; then printf '\033[H\033[2J'; else echo; fi; }
 
@@ -1048,6 +1048,7 @@ ask() {
   read -r reply || { echo; exit 0; }
   reply=${reply%.}   # "3." works like "3"
   case "$reply" in q|Q) exit 0 ;; esac
+  cls   # every answer starts a clean screen: the result of the choice, then the next menu
 }
 
 cat_label() {
@@ -1079,7 +1080,6 @@ pick() {  # pick LIST INPUT
 
 menu_clean() {
   local cat i picked all="$CATEGORIES"$'\n'"$OPTIN"
-  cls
   while :; do
     echo; echo "  Clean up junk — scanning..."
     i=0
@@ -1112,6 +1112,7 @@ ask_folder_min() {  # ask_folder_min DEFAULT_MB
   path="${reply:-$HOME}"
   path="${path/#\~/$HOME}"
   [ -d "$path" ] || { say_back "  Not a folder: $path"; return 1; }
+  echo; echo "  Folder: $path"
   ask "Smallest size in MB (Enter for $1, b to go back): "
   case "$reply" in b|B) return 1 ;; esac
   min="${reply:-$1}"
@@ -1120,7 +1121,6 @@ ask_folder_min() {  # ask_folder_min DEFAULT_MB
 
 menu_big() {
   local path min out
-  cls
   ask_folder_min 500 || return
   echo "  Searching..."
   out=$(cmd_big "$path" --min "$min")
@@ -1131,7 +1131,6 @@ menu_big() {
 
 menu_uninstall() {
   local apps="" scan=1 i kb app
-  cls
   while :; do
     if [ "$scan" = 1 ]; then echo; echo "  Measuring apps..."; apps=$(list_apps); fi
     [ -n "$apps" ] || { say_back "  No apps found."; return; }
@@ -1152,13 +1151,13 @@ menu_uninstall() {
     app=$(echo "$apps" | sed -n "${reply}p" 2>/dev/null | cut -f2-)
     [ -n "$app" ] || { echo "  Not a valid choice."; continue; }
     uninstall_app "$app"
+    echo; ask "Press Enter to go back: "   # the app list that follows would push the result off screen
     scan=1
   done
 }
 
 menu_leftovers() {
   local items="" scan=1 sel
-  cls
   while :; do
     if [ "$scan" = 1 ]; then echo; echo "  Looking for leftovers of removed apps..."; items=$(all_leftovers); fi
     [ -n "$items" ] || { say_back "  No leftovers of removed apps found."; return; }
@@ -1234,7 +1233,6 @@ cmd_dupes() {
 
 menu_dupes() {
   local path min rows row g size f keep copies n p moved
-  cls
   ask_folder_min 10 || return
   echo "  Comparing files. This reads every candidate in full, so it can take a while..."
   rows=$(dupe_groups "$path" "$min")
@@ -1270,7 +1268,6 @@ menu_dupes() {
 }
 
 menu_files() {
-  cls
   while :; do
     echo
     echo "  Large and duplicate files"
@@ -1280,8 +1277,8 @@ menu_files() {
     echo
     ask "Choose: "
     case "$reply" in
-      1) menu_big; cls ;;
-      2) menu_dupes; cls ;;
+      1) menu_big ;;
+      2) menu_dupes ;;
       b|B) return ;;
       *) echo "  Not a valid choice." ;;
     esac
@@ -1289,7 +1286,6 @@ menu_files() {
 }
 
 menu_apps() {
-  cls
   while :; do
     echo
     echo "  Applications"
@@ -1300,9 +1296,9 @@ menu_apps() {
     echo
     ask "Choose: "
     case "$reply" in
-      1) menu_uninstall; cls ;;
-      2) cls; echo "  Checking, this can take a minute..."; cmd_updates; echo; ask "Press Enter to go back: "; cls ;;
-      3) menu_leftovers; cls ;;
+      1) menu_uninstall ;;
+      2) echo "  Checking, this can take a minute..."; cmd_updates; echo; ask "Press Enter to go back: " ;;
+      3) menu_leftovers ;;
       b|B) return ;;
       *) echo "  Not a valid choice." ;;
     esac
@@ -1311,7 +1307,6 @@ menu_apps() {
 
 menu_startup() {
   local rows="" scan=1 row kind state label who plist want
-  cls
   while :; do
     if [ "$scan" = 1 ]; then echo; echo "  Checking startup items..."; rows=$(list_startup); fi
     [ -n "$rows" ] || { say_back "  No startup items found."; return; }
@@ -1340,7 +1335,6 @@ EOF
 
 menu_maintenance() {
   local dates count dev
-  cls
   while :; do
     echo
     echo "  Maintenance"
@@ -1386,7 +1380,6 @@ menu_maintenance() {
 
 menu_security() {
   local rows="" scan=1 row kind state label who plist
-  cls
   while :; do
     if [ "$scan" = 1 ]; then echo; echo "  Checking..."; rows=$(flagged_startup); fi
     print_security "$rows"
@@ -1411,7 +1404,6 @@ EOF
 
 menu_cookies() {  # menu_cookies ROW-FROM-cookie_dbs
   local name label app table col db sites list picked n total i=0 c s mark
-  cls
   IFS=$'\t' read -r name label app table col db <<EOF
 $1
 EOF
@@ -1469,7 +1461,6 @@ EOF
 
 menu_browser() {
   local dbs row i name label app table col db c
-  cls
   while :; do
     dbs=$(cookie_dbs)
     echo
@@ -1501,7 +1492,6 @@ menu_browser() {
 
 menu_tweaks() {
   local i label d k t v app state n
-  cls
   while :; do
     echo
     echo "  Tweaks: hidden macOS settings. Each can be put back to Apple's default here."
@@ -1553,9 +1543,9 @@ EOF
 
 menu_main() {
   local disk
+  cls
   while :; do
     disk=$(df -Pk "$HOME" | awk 'NR == 2 { print $4; print $2 }' | human | paste -sd " " - | sed "s/ / free of /")
-    cls
     printf "  macsweep — Mac cleanup            Disk: %s\n\n" "$disk"
     echo "  1. Clean up junk          (caches, logs, Trash, Xcode, dev and app caches)"
     echo "  2. Large and duplicate files"
@@ -1577,7 +1567,7 @@ menu_main() {
       5) menu_maintenance ;;
       6) menu_security ;;
       7) menu_browser ;;
-      8) cls; cmd_performance; echo; ask "Press Enter to go back: " ;;
+      8) cmd_performance; echo; ask "Press Enter to go back: " ;;
       9) menu_tweaks ;;
       *) echo "  Not a valid choice." ;;
     esac
