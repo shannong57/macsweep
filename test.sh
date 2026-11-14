@@ -83,6 +83,15 @@ menu "1\n9\n0\nx\n1 9\nb\nq\n" >/dev/null; kept "bad selection cleaned something
 menu "1\n1\nn\nb\nq\n" >/dev/null; kept "declining cleaned something"
 menu "1\n1\n" >/dev/null; kept "end of input cleaned something"
 menu "x\nq\n" | grep -q "Not a valid choice" || fail "bad main choice not rejected"
+# On a real screen every answer clears it, and the result of the choice stays visible with the next menu.
+if script -qc true /dev/null >/dev/null 2>&1; then   # util-linux script; the macOS one takes other arguments
+  tty_menu() { script -qc "printf '$1' | '$ms' menu" /dev/null | tr -d "\r" | awk '{ n = split($0, a, "\033\\[2J"); if (n > 1) { buf = a[n] } else buf = buf "\n" $0 } END { print buf }'; }
+  out=$(tty_menu "x\nq\n"); echo "$out" | grep -q "Not a valid choice" || fail "bad main choice wiped by the clear: $out"
+  echo "$out" | grep -q "1. Clean up junk" || fail "next menu missing after the clear: $out"
+  out=$(tty_menu "5\n9\nq\n"); echo "$out" | grep -q "Not a valid choice" || fail "submenu answer did not clear: $out"
+  [ "$(echo "$out" | grep -c "Flush the DNS")" = 1 ] || fail "menu not shown exactly once after the clear: $out"
+  echo "$out" | grep -q "Clean up junk" && fail "submenu answer left the main menu on screen: $out"
+fi
 
 menu "1\n1\ny\nb\nq\n" >/dev/null
 [ ! -e "$HOME/Library/Caches/a" ] || fail "menu did not clean caches"
