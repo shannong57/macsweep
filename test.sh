@@ -270,7 +270,32 @@ grep -q "osascript" "$calls" || fail "Finder not tried after trash refused"
 [ -f "$L/Developer/Xcode/Archives/keep" ] || fail "removed archived builds"
 echo "$out" | grep -q "Library/Developer" || fail "Developer folder not mentioned: $out"
 
+# Data under the name the app calls itself (Code for Visual Studio Code) goes with it, unless
+# another installed app goes by that name.
+app "$A" "Visual Thing Code" com.vis.code 5000; echo "CFBundleName=Vcode" >> "$A/Visual Thing Code.app/Contents/Info.plist"
+app "$A" "Other Editor" com.other.editor 5000; echo "CFBundleName=vcode" >> "$A/Other Editor.app/Contents/Info.plist"
+mk "$L/Application Support/Vcode/x"; mk "$L/Caches/Vcode/x"
+"$ms" uninstall "Visual Thing Code" --dry-run | grep -q "/Vcode" && fail "would take a folder another installed app goes by"
+rm -rf "$A/Other Editor.app"
+"$ms" uninstall "Visual Thing Code" --dry-run | grep -q "Application Support/Vcode" || fail "dry run misses data under the app's own name"
+"$ms" uninstall "Visual Thing Code" --yes >/dev/null
+[ ! -e "$L/Application Support/Vcode" ] && [ ! -e "$L/Caches/Vcode" ] || fail "data under the app's own name left behind"
+
 # Leftovers of apps that are already gone. Stuck (com.fake.stuck) is still installed.
+R="$L/Application Support/com.apple.sharedfilelist/com.apple.LSSharedFileList.ApplicationRecentDocuments"
+meta() { mkdir -p "$1"; echo "MCMMetadataCreator=$2" > "$1/.com.apple.containermanagerd.metadata.plist"; }
+# A removed app whose maker still has one installed counts only with a record that it was an app.
+mk "$R/com.fake.sibling.sfl4"; mk "$L/Caches/com.fake.sibling/x"; mk "$L/Preferences/com.fake.sibling.helper.plist"
+mk "$R/com.fake.stuck.sfl4"                                  # the installed app's own record
+mk "$R/com.fake.inside.sfl4"; mk "$L/Caches/com.fake.inside/keep"   # a helper that lives inside Stuck.app
+mkdir -p "$A/Stuck.app/Contents/Library/LoginItems/H.app/Contents"
+echo "CFBundleIdentifier=com.fake.inside" > "$A/Stuck.app/Contents/Library/LoginItems/H.app/Contents/Info.plist"
+# Group containers go by the app that created them.
+meta "$L/Group Containers/group.com.gone.shared" com.gone.app
+meta "$L/Group Containers/group.shared.things" com.fake.stuck
+meta "$L/Group Containers/ABCDE12345.Office" com.fake.sibling          # shared with the maker's installed app
+meta "$L/Group Containers/group.is.workflow.shortcuts" com.apple.siriactionsd
+meta "$L/Group Containers/group.com.fake.family" com.gone.app          # named after an installed maker
 mk "$L/Caches/com.gone.app/data"
 mk "$L/Preferences/com.gone.app.plist"
 mk "$L/HTTPStorages/com.gone.app.binarycookies"
@@ -300,25 +325,31 @@ $L/Caches/com.gone.thing
 $L/Caches/com.gone.app
 $L/HTTPStorages/com.gone.app.binarycookies
 $L/LaunchAgents/com.gone.dead.plist
-$L/Preferences/com.gone.app.plist"
+$L/Preferences/com.gone.app.plist
+$R/com.fake.sibling.sfl4
+$L/Caches/com.fake.sibling
+$L/Preferences/com.fake.sibling.helper.plist
+$L/Group Containers/group.com.gone.shared"
 IFS=$'\n'   # $gone holds paths with spaces
 kept_left() {
   for p in "$L/Caches/com.fake.helper/keep" "$L/Containers/ABCDE12345.com.fake.browser-helper/keep" "$L/Preferences/com.apple.finder.plist" "$L/Preferences/group.com.gone.shared.plist" \
            "$L/Caches/Some Folder/keep" "$L/Application Support/Thing/keep" "$L/LaunchAgents/com.gone.tool.plist" "$A/Vendor Links/Stuck" "$A/Phone.app/Wrapper/Phone.app/Info.plist" \
-           "$HOME/Applications/Chrome Apps.localized"; do
+           "$HOME/Applications/Chrome Apps.localized" "$R/com.fake.stuck.sfl4" "$R/com.fake.inside.sfl4" "$L/Caches/com.fake.inside/keep" \
+           "$L/Group Containers/group.shared.things" "$L/Group Containers/ABCDE12345.Office" "$L/Group Containers/group.is.workflow.shortcuts" \
+           "$L/Group Containers/group.com.fake.family"; do
     [ -e "$p" ] || [ -L "$p" ] || fail "$1: $p"
   done
 }
 out=$("$ms" leftovers </dev/null 2>&1 || true)
 for p in $gone; do echo "$out" | grep -qF "$p" || fail "leftover not listed: $p ($out)"; done
-[ "$(echo "$out" | grep -c '^ *[0-9]*\. ')" = 9 ] || fail "listed something it should keep: $out"
+[ "$(echo "$out" | grep -c '^ *[0-9]*\. ')" = 13 ] || fail "listed something it should keep: $out"
 for p in $gone; do [ -e "$p" ] || fail "moved without a tty or --yes: $p"; done
 mk "$L/Caches/com.gonestuck.Stuck/x"
 out=$("$ms" leftovers --yes || true)
 echo "$out" | grep -q "Full Disk Access" || fail "no permission hint after a failed move: $out"
 [ ! -e "$A/Half.app" ] && [ ! -e "$L/Caches/com.gone.app" ] || fail "leftovers not moved: $out"
 rm -rf "$L/Caches/com.gonestuck.Stuck"; kept_left "leftovers --yes took a kept file"
-for p in $gone; do mk "$p/x"; done
+for p in $gone; do mk "$p/x"; done; meta "$L/Group Containers/group.com.gone.shared" com.gone.app
 menu "3\n3\n99\nb\nb\nq\n" >/dev/null; menu "3\n3\n1\nn\nb\nb\nq\n" >/dev/null
 for p in $gone; do [ -e "$p" ] || fail "menu moved after declining: $p"; done
 menu "3\n3\n1\ny\nb\nb\nq\n" >/dev/null
