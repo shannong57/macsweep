@@ -6,7 +6,7 @@
 set -uf      # no globbing: every path below is literal
 IFS=$'\n'    # split lists on newlines only, so paths may contain spaces
 
-VERSION="0.13.2"
+VERSION="0.13.3"
 CATEGORIES=$'caches\nlogs\ntrash\nxcode\ndevcaches\nappcaches'
 OPTIN=backups   # cleaned only when named: never part of "clean all"
 MENU=0       # 1 when running inside the menu, which is always interactive
@@ -262,6 +262,7 @@ list_apps() {
 ID_DIRS=$'Application Support\nCaches\nPreferences\nPreferences/ByHost\nContainers\nGroup Containers
 Application Scripts\nSaved Application State\nLogs\nHTTPStorages\nWebKit\nCookies\nLaunchAgents
 Application Support/com.apple.sharedfilelist/com.apple.LSSharedFileList.ApplicationRecentDocuments'
+RECENTS="Application Support/com.apple.sharedfilelist/com.apple.LSSharedFileList.ApplicationRecentDocuments"
 SYS_DIRS=$'LaunchAgents\nLaunchDaemons\nPrivilegedHelperTools\nApplication Support\nPreferences\nCaches\nLogs'
 
 # IDs of other installed apps that begin with this app's ID, like Chrome Canary next to
@@ -279,10 +280,13 @@ without_theirs() {
 # By name, only an exact match, or a maker's folder that spells the name with it
 # (Google/Chrome for "Google Chrome"). The ID and name come from the app itself, so
 # anything that could climb out of these folders is ignored.
-# ponytail: misses data in a folder named differently from the app (Code for Visual Studio Code).
-app_files() {  # app_files ID NAME
-  local id="$1" name="$2" L="$HOME/Library" S="$ROOT/Library" d g dirs
-  case "$name" in ''|.*|*/*) ;; *)
+# BUNDLE_NAME is what the app calls itself when that differs from its file name (Code for
+# Visual Studio Code), and is looked for the same way.
+# ponytail: misses data in a folder named after neither (zoom.us keeps some in "us.zoom").
+app_files() {  # app_files ID NAME [BUNDLE_NAME]
+  local id="$1" name L="$HOME/Library" S="$ROOT/Library" d g dirs
+  for name in "$2" ${3:-}; do
+    case "$name" in ''|.*|*/*) continue ;; esac
     for d in "$L/Application Support/$name" "$L/Caches/$name" "$L/Logs/$name" "$S/Application Support/$name"; do
       if [ -e "$d" ] || [ -L "$d" ]; then echo "$d"; fi
     done
@@ -290,8 +294,8 @@ app_files() {  # app_files ID NAME
       N="$name" awk -F/ '{ n = ENVIRON["N"]; c = $NF; p = $(NF-1) } (c == n && p != n && index(n, p) == 1) || (p " " c == n)'
     g=$(printf %s "$name" | sed 's/[][*?\\]/\\&/g')   # crash reports
     find "$L/Logs/DiagnosticReports" -maxdepth 1 \( -name "${g}-20[0-9][0-9]-*" -o -name "${g}_20[0-9][0-9]-*" \) 2>/dev/null
-    find "$L/Application Support/CrashReporter" -maxdepth 1 -name "${g}_*.plist" 2>/dev/null ;;
-  esac
+    find "$L/Application Support/CrashReporter" -maxdepth 1 -name "${g}_*.plist" 2>/dev/null
+  done
   case "$id" in ''|.*|*[!A-Za-z0-9._-]*) return 0 ;; esac
   dirs=$(echo "$ID_DIRS" | sed "s|^|$L/|"; echo "$SYS_DIRS" | sed "s|^|$S/|")
   # The per-user cache and temp folders in /var/folders. Skipped under a test root.
@@ -414,7 +418,7 @@ related_items() {  # related_items NAME
 under_sys() { P="$ROOT/Library/" awk -v want="$1" '(index($0, ENVIRON["P"]) == 1) == want'; }
 
 uninstall_app() {
-  local app="$1" yes="${2:-0}" dry="${3:-0}" plist="$1/Contents/Info.plist" name id ver all items sys p kb running rel sel
+  local app="$1" yes="${2:-0}" dry="${3:-0}" plist="$1/Contents/Info.plist" name id ver alt all items sys p kb running rel sel
   name=$(basename "$app" .app)
   id=$(plist_get "$plist" CFBundleIdentifier)
   ver=$(plist_get "$plist" CFBundleShortVersionString)
@@ -424,7 +428,12 @@ uninstall_app() {
   APPS=$(installed_apps | ID="$id" N="$name" awk -F'\t' 'tolower($1) != tolower(ENVIRON["ID"]) && $2 != ENVIRON["N"]')
   OTHERS=$(longer_ids "$id")
   MAKER=$(free_maker "$id")
-  all=$(app_files "$id" "$name" | sort -u)
+  # The app's own name for itself. Not when another installed app goes by it, or for the
+  # name every unbranded Electron app shares.
+  alt=$(plist_get "$plist" CFBundleName)
+  if [ "${#alt}" -lt 3 ] || [ "$alt" = "$name" ] || [ "$alt" = Electron ] ||
+     echo "$APPS" | A="$alt" awk -F'\t' 'BEGIN { a = tolower(ENVIRON["A"]) } tolower($2) == a || tolower($3) == a { f = 1 } END { exit !f }'; then alt=""; fi
+  all=$(app_files "$id" "$name" "$alt" | sort -u)
   sys=$(echo "$all" | under_sys 1)
   items=$(echo "$all" | under_sys 0)
 
@@ -525,66 +534,108 @@ trash_items() {  # trash_items PATHS [START_KB]
   fi
 }
 
-# "ID<tab>name" of every installed app. Spotlight finds apps anywhere; the folder scan
-# covers a Mac with Spotlight turned off.
+# "ID<tab>name<tab>bundle name<tab>path" of every installed app. Spotlight finds apps
+# anywhere; the folder scan covers a Mac with Spotlight turned off.
 installed_apps() {
   local a
   { mdfind 'kMDItemContentType == "com.apple.application-bundle"' 2>/dev/null
     find "$ROOT/Applications" "$HOME/Applications" "$ROOT/System/Applications" -maxdepth 3 -name "*.app" -prune 2>/dev/null
   } | while read -r a; do
-    printf "%s\t%s\n" "$(plist_get "$a/Contents/Info.plist" CFBundleIdentifier)" "$(basename "$a" .app)"
+    printf "%s\t%s\t%s\t%s\n" "$(plist_get "$a/Contents/Info.plist" CFBundleIdentifier)" "$(basename "$a" .app)" \
+      "$(plist_get "$a/Contents/Info.plist" CFBundleName)" "$a"
   done | sort -u
 }
 
 # Library items named after an app ID whose maker has no app installed. Matching the maker,
-# not the whole ID, keeps the files of an installed app's helpers and extensions. Apple's,
-# shared-group and printer items are never listed, nor a launch agent whose program still exists,
+# not the whole ID, keeps the files of an installed app's helpers and extensions. Apple's
+# and printer items are never listed, nor a launch agent whose program still exists,
 # nor anything whose maker's name is part of an installed app's name or ID.
 # Installer records count when their files are all gone and their maker passes the same checks.
 # A folder named only by an app's name counts when it matches the name part of such an ID
 # (CleanMyMac_5_HealthMonitor for com.macpaw.CleanMyMac5.HealthMonitor), never an installed app's name.
 # In /Library, where removal is for good, only items named by ID count, and never those of a
 # maker with a background job whose program still exists: a driver or VPN has no app.
-# ponytail: misses leftovers from a maker that still has another app installed, and group.* containers.
+# A shared group container is judged by the app macOS recorded as creating it, and by its own
+# name when that is an ID. Both makers must be gone, since apps of one maker share them.
+# When the maker still has an app installed, an ID counts only if macOS kept a window or
+# recent-documents record for it (so it was an app), nothing installed has that ID, extends it
+# or is extended by it, and no installed app of the maker carries it inside (see inside_app).
+# ponytail: a removed app that left no such record stays unlisted while its maker has another
+# app installed; so do shared group containers. Uninstalling with macsweep catches both.
 orphans() {
-  local L="$HOME/Library" S="$ROOT/Library" f prog live=""
+  local L="$HOME/Library" S="$ROOT/Library" f prog root apps live="" alive="" dead=""
   for f in $(find "$S/LaunchAgents" "$S/LaunchDaemons" -maxdepth 1 -name "*.plist" 2>/dev/null); do
     prog=$(plist_get "$f" ProgramArguments.0 || plist_get "$f" Program)
     if [ -n "$prog" ] && [ -e "$prog" ]; then live="$live$(basename "$f")"$'\n'; fi
   done
+  apps=$(installed_apps)
   # shellcheck disable=SC2046  # one folder per line
   { find "$L/Application Support" "$L/Caches" "$L/Containers" "$L/Saved Application State" "$L/Logs" \
-       "$L/HTTPStorages" "$L/WebKit" "$L/Preferences" "$L/LaunchAgents" "$L/Group Containers" \
-       "$L/Application Scripts" "$L/Cookies" "$L/Preferences/ByHost" \
-       $(echo "$SYS_DIRS" | sed "s|^|$S/|") -mindepth 1 -maxdepth 1 2>/dev/null; dead_receipts; } |
-  APPS=$(installed_apps) LIVE="$live" SYS="$S/" awk -F'\t' '
+       "$L/HTTPStorages" "$L/WebKit" "$L/Preferences" "$L/LaunchAgents" \
+       "$L/Application Scripts" "$L/Cookies" "$L/Preferences/ByHost" "$L/$RECENTS" \
+       $(echo "$SYS_DIRS" | sed "s|^|$S/|") -mindepth 1 -maxdepth 1 2>/dev/null
+    for f in $(find "$L/Group Containers" -mindepth 1 -maxdepth 1 2>/dev/null); do
+      printf "%s\t%s\n" "$f" "$(plist_get "$f/.com.apple.containermanagerd.metadata.plist" MCMMetadataCreator)"
+    done
+    dead_receipts; } |
+  APPS="$apps" LIVE="$live" SYS="$S/" awk -F'\t' '
     function norm(s) { s = tolower(s); gsub(/[^a-z0-9]/, "", s); return s }
     function base(s) { sub(/.*\//, "", s); return s }
+    function team(s) { sub(/^[0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z]\./, "", s); return s }
+    function is_id(s) { return s ~ /^[a-z0-9-]+\.[a-z0-9-]+\.[a-z0-9._-]+$/ }
+    function apple(s) { return s ~ /^(systemgroup|org\.cups)\./ || s ~ /(^|\.)com\.apple\./ }
+    function maker_gone(s,   q, m, x) {                                        # nothing installed shares the maker
+      if (apple(s)) return 0
+      for (m in M) if (index("." s ".", "." m ".")) return 0                   # an installed maker, anywhere in the name
+      split(s, q, "."); if (length(q[2]) >= 4) for (x in N) if (index(x, norm(q[2]))) return 0   # com.dropbox.* next to Dropbox (com.getdropbox)
+      return 1 }
+    function installed(s,   x) { for (x in ID) if (s == x || index(s, x ".") == 1 || index(x, s ".") == 1) return 1; return 0 }
     BEGIN { n = split(ENVIRON["APPS"], a, "\n")
-            for (i = 1; i <= n; i++) { split(a[i], f, "\t"); split(tolower(f[1]), p, ".")
+            for (i = 1; i <= n; i++) { split(a[i], f, "\t"); split(tolower(f[1]), p, "."); if (f[1] != "") ID[tolower(f[1])]
                                        if (p[2] != "") M[p[1] "." p[2]]; N[norm(f[2])]; N[norm(f[1])] }
             n = split(tolower(ENVIRON["LIVE"]), a, "\n")
             for (i = 1; i <= n; i++) { split(a[i], p, "."); if (p[2] != "") LV[p[1] "." p[2]] } }
-    { path[NR] = $0; id = base($0); if (index($0, ENVIRON["SYS"]) == 1 || sub(/^pkg:/, "", id)) sys[NR] = 1
-      sub(/^[0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z]\./, "", id)  # team ID
-      id = tolower(id); sub(/\.(savedstate|plist|binarycookies)$/, "", id)
-      if (id !~ /^[a-z0-9-]+\.[a-z0-9-]+\.[a-z0-9._-]+$/) { plain[NR] = 1; next }
-      if (id ~ /^(group|systemgroup|org\.cups)\./ || id ~ /(^|\.)com\.apple\./) next
+    { path[NR] = $1; id = base($1); if (index($1, ENVIRON["SYS"]) == 1 || sub(/^pkg:/, "", id)) sys[NR] = 1
+      id = team(id); grp = sub(/^group\./, "", id); id = tolower(team(id)); sub(/\.(savedstate|plist|binarycookies|sfl[0-9]*)$/, "", id)
+      if ($1 ~ /\/Group Containers\/[^\/]*$/) {
+        c = tolower($2)
+        if (c != "") { if (is_id(c) && maker_gone(c) && !apple(id) && (!is_id(id) || maker_gone(id))) gone[NR] = 1; next }
+      }
+      if (grp) next
+      if (!is_id(id)) { plain[NR] = 1; next }
+      if (apple(id)) next
       k = split(id, p, "."); if ((NR in sys) && ((p[1] "." p[2]) in LV)) next
-      for (m in M) if (index("." id ".", "." m ".")) next                     # an installed maker, anywhere in the name
-      if (length(p[2]) >= 4) for (x in N) if (index(x, norm(p[2]))) next      # com.dropbox.* next to Dropbox (com.getdropbox)
-      gone[NR] = 1; t = ""; for (j = 3; j <= k; j++) { t = t p[j]; T[norm(t)] } }
+      if (maker_gone(id)) { gone[NR] = 1; t = ""; for (j = 3; j <= k; j++) { t = t p[j]; T[norm(t)] } }
+      else if (((p[1] "." p[2]) in M) && $1 !~ /\/Group Containers\//) {
+        sib[NR] = id; if ($1 ~ /(\/Saved Application State|ApplicationRecentDocuments)\/[^\/]*$/ && !installed(id)) WAS[id] } }
     END { for (i = 1; i <= NR; i++) {
             if (i in gone) print path[i]
+            else if (i in sib) { for (r in WAS) if ((sib[i] == r || index(sib[i], r ".") == 1) && !installed(sib[i])) { print path[i] "\t" r; break } }
             else if ((i in plain) && !(i in sys) && path[i] ~ /\/Library\/(Application Support|Caches|Logs)\/[^\/]*$/) {
               k = norm(base(path[i])); if (length(k) >= 4 && (k in T) && !(k in N)) print path[i] } } }' | sort |
-  while read -r f; do
+  while IFS=$'\t' read -r f root; do
+    if [ -n "$root" ]; then
+      case $'\n'"$alive$dead" in *$'\n'"$root"$'\n'*) ;; *)
+        if APPS="$apps" inside_app "$root"; then alive="$alive$root"$'\n'; else dead="$dead$root"$'\n'; fi ;;
+      esac
+      case $'\n'"$alive" in *$'\n'"$root"$'\n'*) continue ;; esac
+    fi
     case "$f" in "$L/LaunchAgents/"*)
       prog=$(plist_get "$f" ProgramArguments.0 || plist_get "$f" Program)
       if [ -n "$prog" ] && [ -e "$prog" ]; then continue; fi ;;
     esac
     echo "$f"
   done
+}
+
+# Whether an installed app of the same maker carries this ID inside it, as a helper or an
+# extension does. A longer ID that contains it also counts: that errs towards keeping files.
+inside_app() {  # inside_app ID, with APPS from installed_apps
+  local paths
+  paths=$(echo "$APPS" | M="$(echo "$1" | cut -d. -f1,2)." awk -F'\t' 'index(tolower($1), ENVIRON["M"]) == 1 && $4 != "" { print $4 }')
+  [ -n "$paths" ] || return 1
+  # shellcheck disable=SC2086  # one app per line
+  find $paths -name Info.plist -exec grep -liF -- "$1" {} + 2>/dev/null | grep -q .
 }
 
 # Folders in Applications that no longer hold an app: a maker's folder whose apps are gone, or
